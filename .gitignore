@@ -1,0 +1,35 @@
+# Ignore Python bytecode files
+__pycache__/
+
+# Ignore environment-specific files
+.env
+
+# Ignore database files
+*.db
+
+# Ignore system or hidden files
+.DS_Store
+Thumbs.db
+
+# Ignore user-specific files or directories
+*.log
+*.swp
+*.swo
+.vscode/
+
+# Ignore virtual environment
+venv/
+
+# secret keys
+google-cloud-key.json
+
+# files
+__pycache__
+.pytest_cache
+schedule_tasks/
+schedule_tasks/*.dat
+schedule_tasks/*.bak
+schedule_tasks/*.dir
+tests
+todo.txt
+# create_schedule_tasks.sh
