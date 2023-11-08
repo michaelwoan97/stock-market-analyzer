@@ -81,7 +81,7 @@ create_tables_sql = [
         "low" FLOAT,
         "open" FLOAT,
         "high" FLOAT,
-        "volume" INT,
+        "volume" BIGINT,
         "close" FLOAT,
         CONSTRAINT "FK_Stocks.stock_id"
         FOREIGN KEY ("stock_id")

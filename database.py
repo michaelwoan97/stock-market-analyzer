@@ -47,7 +47,7 @@ def create_connection():
     try:
         return psycopg2.connect(**db_params)
     except psycopg2.OperationalError as e:
-        print(f"Error connecting to the database: {e}")
+        print(f"Error connecting to the database: {e.with_traceback}")
         # You can choose to handle the error or re-raise it here
         raise e
 

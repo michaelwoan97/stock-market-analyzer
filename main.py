@@ -16,6 +16,9 @@ load_dotenv()
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY')
 
+# Enable debug mode
+app.debug = True
+
 def token_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):

@@ -19,6 +19,7 @@ Thumbs.db
 
 # Ignore virtual environment
 venv/
+myenv
 
 # secret keys
 google-cloud-key.json
@@ -26,10 +27,9 @@ google-cloud-key.json
 # files
 __pycache__
 .pytest_cache
-schedule_tasks/
-schedule_tasks/*.dat
-schedule_tasks/*.bak
-schedule_tasks/*.dir
+/schedule_tasks/*.dat
+/schedule_tasks/*.bak
+/schedule_tasks/*.dir
 tests
 todo.txt
 # create_schedule_tasks.sh
