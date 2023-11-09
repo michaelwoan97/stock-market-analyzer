@@ -49,8 +49,9 @@ from database import add_stock_to_watchlist, create_watchlist, delete_watchlist,
 # update_watchlist_stocks(watchlist_id, updated_stocks)
 
 # Test when data is available
-stock_ticker_ids = [
-    {'stock_id': 1, 'ticker_symbol': 'AAPL'},
-    {'stock_id': 2, 'ticker_symbol': 'GOOG'},
-]
-update_stock_data_daily(stock_ticker_ids)
+# stock_ticker_ids = [
+#     {'stock_id': 1, 'ticker_symbol': 'AAPL'},
+#     {'stock_id': 2, 'ticker_symbol': 'GOOG'},
+# ]
+# update_stock_data_daily(stock_ticker_ids)
+

@@ -1,6 +1,8 @@
 import argparse
 import concurrent.futures
 import psycopg2
+import sys
+sys.path.append('./')
 
 from database import process_stock
 
