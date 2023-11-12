@@ -236,6 +236,39 @@ def update_stock_data_daily(stockTickerIds):
 
     return combined_data
 
+def save_stock_data_to_csv(stock_data, ticker_symbol, output_dir):
+    # Convert the stock data to a Pandas DataFrame
+    df = pd.DataFrame(stock_data)
+
+    # Define the path to save the CSV file
+    output_path = os.path.join(output_dir, f"{ticker_symbol}.csv")
+
+    # Save the DataFrame to CSV
+    df.to_csv(output_path, index=False)
+
+def get_stocks_data_available():
+    # Assuming you have a function to get the list of stocks with their IDs and ticker symbols
+    stocks_info = get_stocks_ticker_id_exist()
+
+    # Assuming you have a function to create a database connection
+    connection = create_connection()
+
+    # Specify the output directory for saving CSV files
+    output_directory = "./data-processing/stocks-data"
+
+    for stock_info in stocks_info:
+        stock_id = stock_info['stock_id']
+        ticker_symbol = stock_info['ticker_symbol']
+
+        # Fetch stock data from the database
+        stock_data = fetch_stock_data_from_db(connection, stock_id, ticker_symbol)
+
+        # Save stock data to a CSV file
+        save_stock_data_to_csv(stock_data, ticker_symbol, output_directory)
+
+    # Close the database connection
+    connection.close()
+
 # ========== User ==========
 # This section contains functions and classes related to user data.
 

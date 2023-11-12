@@ -27,9 +27,11 @@ google-cloud-key.json
 # files
 __pycache__
 .pytest_cache
-/schedule_tasks/*.dat
-/schedule_tasks/*.bak
-/schedule_tasks/*.dir
+schedule_tasks/*.dat
+schedule_tasks/*.bak
+schedule_tasks/*.dir
+data-processing/stocks-data
+
 tests
 todo.txt
 # create_schedule_tasks.sh
