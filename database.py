@@ -269,6 +269,46 @@ def get_stocks_data_available():
     # Close the database connection
     connection.close()
 
+
+def get_stocks_data_combined_to_csv():
+    # Assuming you have a function to get the list of stocks with their IDs and ticker symbols
+    stocks_info = get_stocks_ticker_id_exist()
+
+    # Create an empty DataFrame to store combined stock data
+    combined_stock_data = pd.DataFrame()
+
+    # Assuming you have a function to create a database connection
+    connection = create_connection()
+
+    for stock_info in stocks_info:
+        stock_id = stock_info['stock_id']
+        ticker_symbol = stock_info['ticker_symbol']
+
+        # Fetch stock data from the database
+        stock_data_list = fetch_stock_data_from_db(connection, stock_id, ticker_symbol)
+
+        # Convert the list to a DataFrame
+        stock_data = pd.DataFrame(stock_data_list)
+
+        # Add stock ID and ticker symbol columns to the DataFrame
+        stock_data['stock_id'] = stock_id
+        stock_data['ticker_symbol'] = ticker_symbol
+
+        # Reorder columns
+        stock_data = stock_data[['stock_id', 'ticker_symbol', 'date', 'low', 'open', 'high', 'volume', 'close']]
+
+        # Combine the stock data with the existing DataFrame
+        combined_stock_data = pd.concat([combined_stock_data, stock_data], ignore_index=True)
+
+    # Specify the output file path for saving the combined CSV file
+    output_file_path = "./data-processing/stocks-data/combined-stocks-data.csv"
+
+    # Save the combined stock data to a CSV file
+    combined_stock_data.to_csv(output_file_path, index=False)
+
+    # Close the database connection
+    connection.close()
+
 # ========== User ==========
 # This section contains functions and classes related to user data.
 

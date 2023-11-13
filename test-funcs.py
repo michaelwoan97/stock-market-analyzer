@@ -1,4 +1,4 @@
-from database import add_stock_to_watchlist, create_watchlist, delete_watchlist, find_watchlist, find_user_by_id,get_watchlist, update_stock_data_daily, update_watchlist_info, update_watchlist_stocks_info,get_stocks_data_available
+from database import add_stock_to_watchlist, create_watchlist, delete_watchlist, find_watchlist, find_user_by_id, get_stocks_data_combined_to_csv,get_watchlist, update_stock_data_daily, update_watchlist_info, update_watchlist_stocks_info,get_stocks_data_available
 
 # # test remove watchlist
 # watchlist_id_to_delete = 'e95b2790-5aa7-4c34-97ed-24cab1d7e94f'
@@ -56,4 +56,4 @@ from database import add_stock_to_watchlist, create_watchlist, delete_watchlist,
 # update_stock_data_daily(stock_ticker_ids)
 
 print("Processing stock data and save files!!!")
-get_stocks_data_available()
+get_stocks_data_combined_to_csv()
