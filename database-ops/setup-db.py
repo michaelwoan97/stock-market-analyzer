@@ -75,6 +75,7 @@ create_tables_sql = [
     """,
     """
     CREATE TABLE IF NOT EXISTS "Stocks" (
+        "transaction_id" UUID,
         "stock_id" UUID,
         "ticker_symbol" VARCHAR,
         "date" DATE,
@@ -83,6 +84,7 @@ create_tables_sql = [
         "high" FLOAT,
         "volume" BIGINT,
         "close" FLOAT,
+        PRIMARY KEY ("transaction_id"),
         CONSTRAINT "FK_Stocks.stock_id"
         FOREIGN KEY ("stock_id")
             REFERENCES "CompanyInformation"("stock_id"),

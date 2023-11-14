@@ -106,7 +106,7 @@ def stock_data_exists(connection, stock_id, ticker_symbol):
 def fetch_stock_data_from_db(connection, stock_id, ticker_symbol):
     cursor = connection.cursor()
     query = """
-    SELECT "date", "low", "open", "high", "volume", "close"
+    SELECT "transaction_id", "date", "low", "open", "high", "volume", "close"
     FROM "Stocks"
     WHERE "stock_id" = %s AND "ticker_symbol" = %s
     ORDER BY "date" ASC;
@@ -116,8 +116,9 @@ def fetch_stock_data_from_db(connection, stock_id, ticker_symbol):
     # Fetch all rows and store them as a list of dictionaries
     data = []
     for row in cursor.fetchall():
-        date, low, open, high, volume, close = row
+        transaction_id, date, low, open, high, volume, close = row
         data.append({
+            "transaction_id": transaction_id,
             "date": date, 
             "low": low,
             "open": open,
@@ -134,11 +135,14 @@ def insert_stock_data_into_db(connection, stock_data):
     cursor = connection.cursor()
     try:
         for data_point in stock_data.data:
+            # Generate a UUID for the watchlist_id
+            transaction_id = str(uuid.uuid4())
+            
             query = """
-            INSERT INTO "Stocks" ("stock_id", "ticker_symbol", "date", "low", "open", "high", "volume", "close")
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
+            INSERT INTO "Stocks" ("transaction_id", "stock_id", "ticker_symbol", "date", "low", "open", "high", "volume", "close")
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
             """
-            cursor.execute(query, (stock_data.stock_id, stock_data.ticker_symbol, data_point['date'], data_point['low'], data_point['open'], data_point['high'], data_point['volume'], data_point['close']))
+            cursor.execute(query, (transaction_id, stock_data.stock_id, stock_data.ticker_symbol, data_point['date'], data_point['low'], data_point['open'], data_point['high'], data_point['volume'], data_point['close']))
         connection.commit()
     except Exception as e:
         connection.rollback()
@@ -293,9 +297,9 @@ def get_stocks_data_combined_to_csv():
         # Add stock ID and ticker symbol columns to the DataFrame
         stock_data['stock_id'] = stock_id
         stock_data['ticker_symbol'] = ticker_symbol
-
+        print(stock_data)
         # Reorder columns
-        stock_data = stock_data[['stock_id', 'ticker_symbol', 'date', 'low', 'open', 'high', 'volume', 'close']]
+        stock_data = stock_data[['transaction_id', 'stock_id', 'ticker_symbol', 'date', 'low', 'open', 'high', 'volume', 'close']]
 
         # Combine the stock data with the existing DataFrame
         combined_stock_data = pd.concat([combined_stock_data, stock_data], ignore_index=True)
