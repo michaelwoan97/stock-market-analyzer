@@ -24,7 +24,8 @@ db_params = {
 
 # Define a class to represent stock data
 class StockData:
-    def __init__(self, stock_id, ticker_symbol, country, data=None):
+    def __init__(self, stock_id, ticker_symbol, country, transaction_id=str(uuid.uuid4()), data=None):
+        self.transaction_id = transaction_id
         self.stock_id = stock_id
         self.ticker_symbol = ticker_symbol
         self.country = country
