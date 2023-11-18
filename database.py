@@ -140,9 +140,10 @@ def insert_stock_data_into_db(connection, stock_data):
             transaction_id = str(uuid.uuid4())
             
             query = """
-            INSERT INTO "Stocks" ("transaction_id", "stock_id", "ticker_symbol", "date", "low", "open", "high", "volume", "close")
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
-            """
+                    INSERT INTO "Stocks" ("transaction_id", "stock_id", "ticker_symbol", "date", "low", "open", "high", "volume", "close")
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT ("date") DO NOTHING;
+                """
             cursor.execute(query, (transaction_id, stock_data.stock_id, stock_data.ticker_symbol, data_point['date'], data_point['low'], data_point['open'], data_point['high'], data_point['volume'], data_point['close']))
         connection.commit()
     except Exception as e:
@@ -153,41 +154,48 @@ def insert_stock_data_into_db(connection, stock_data):
 
 # Function to process stock data for a given company
 def process_stock(ticker_symbol, country, query_urls, stock_data_objects):
-    connection = create_connection()
-    stock_ids = check_company_exists(connection, ticker_symbol, country)
-    
-    if stock_ids:
-        print(f"Company with ticker symbol {ticker_symbol} in {country} exists in the database with stock_id: {stock_ids}")
+    try:
+        connection = create_connection()
         
-        # Assume stock_ids is a list of stock_id values
-        for stock_id in stock_ids:
-            if not stock_data_exists(connection, stock_id, ticker_symbol):
-                print(f"No stock data found for {ticker_symbol} with stock_id {stock_id} in the database. Need to fetch data.")
-                query_url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker_symbol}?symbol={ticker_symbol}&period1=0&period2=9999999999&interval=1d&includePrePost=true&events=div%2Csplit"
-                
-                # Fetch stock data using the query_url and store it in a StockData object
-                stock_data = fetch_stock_data_from_url(query_url)
-                stock_data_objects.append(
-                    StockData(stock_id, ticker_symbol, country, data=stock_data)
-                )
+        stock_ids = check_company_exists(connection, ticker_symbol, country)
+        
+        if stock_ids:
+            print(f"Company with ticker symbol {ticker_symbol} in {country} exists in the database with stock_id: {stock_ids}")
+            
+            # Assume stock_ids is a list of stock_id values
+            for stock_id in stock_ids:
+                try:
+                    if not stock_data_exists(connection, stock_id, ticker_symbol):
+                        print(f"No stock data found for {ticker_symbol} with stock_id {stock_id} in the database. Need to fetch data.")
+                        query_url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker_symbol}?symbol={ticker_symbol}&period1=0&period2=9999999999&interval=1d&includePrePost=true&events=div%2Csplit"
+                        
+                        # Fetch stock data using the query_url and store it in a StockData object
+                        stock_data = fetch_stock_data_from_url(query_url)
+                        stock_data_objects.append(
+                            StockData(stock_id, ticker_symbol, country, data=stock_data)
+                        )
 
-                # Insert the fetched stock data into the database
-                for stock_data in stock_data_objects:
-                    # Ensure that stock_data_objects contains StockData instances
-                    insert_stock_data_into_db(connection, stock_data)
+                        # Insert the fetched stock data into the database
+                        for stock_data in stock_data_objects:
+                            # Ensure that stock_data_objects contains StockData instances
+                            insert_stock_data_into_db(connection, stock_data)
 
-                print(f"Stock data for {ticker_symbol} with stock_id {stock_id} fetched from Yahoo Finance and inserted into the database.")
-            else:
-                # Fetch stock data from the database and store it in a StockData object
-                stock_data = fetch_stock_data_from_db(connection, stock_id, ticker_symbol)
-                stock_data_objects.append(
-                    StockData(stock_id, ticker_symbol, country, data=stock_data)
-                )
-                print(f"Stock data for {ticker_symbol} with stock_id {stock_id} already exists in the database.")
-    else:
-        print(f"Company with ticker symbol {ticker_symbol} in {country} does not exist in the database.")
+                        print(f"Stock data for {ticker_symbol} with stock_id {stock_id} fetched from Yahoo Finance and inserted into the database.")
+                    else:
+                        # Fetch stock data from the database and store it in a StockData object
+                        stock_data = fetch_stock_data_from_db(connection, stock_id, ticker_symbol)
+                        stock_data_objects.append(
+                            StockData(stock_id, ticker_symbol, country, data=stock_data)
+                        )
+                        print(f"Stock data for {ticker_symbol} with stock_id {stock_id} already exists in the database.")
+                except Exception as e:
+                    print(f"An error occurred while processing stock data: {e}")
+    except Exception as e:
+        print(f"An error occurred while creating a database connection: {e}")
+    finally:
+        # Close the database connection in a finally block to ensure it is always closed
+        connection.close()
 
-    connection.close()
 
 def update_stock_data_daily(stockTickerIds):
 

@@ -11,31 +11,29 @@ def fetch_stock_data_from_url(query_url):
             # Parse the JSON data from the URL
             parsed = json.loads(url.read().decode())
 
-            # Extract the 'timestamp' data and convert it to the 'Date' format
-            Date = []
-            for i in parsed['chart']['result'][0]['timestamp']:
-                Date.append(datetime.utcfromtimestamp(int(i)).strftime('%d-%m-%Y'))
+            # Extract the 'timestamp' data and convert it to the 'date' format
+            date_list = [datetime.utcfromtimestamp(int(i)).strftime('%Y-%m-%d') for i in parsed['chart']['result'][0]['timestamp']]
 
             # Extract other data points (low, open, volume, high, close)
-            Low = parsed['chart']['result'][0]['indicators']['quote'][0]['low']
-            Open = parsed['chart']['result'][0]['indicators']['quote'][0]['open']
-            Volume = parsed['chart']['result'][0]['indicators']['quote'][0]['volume']
-            High = parsed['chart']['result'][0]['indicators']['quote'][0]['high']
-            Close = parsed['chart']['result'][0]['indicators']['quote'][0]['close']
+            low = parsed['chart']['result'][0]['indicators']['quote'][0]['low']
+            open_price = parsed['chart']['result'][0]['indicators']['quote'][0]['open']
+            volume = parsed['chart']['result'][0]['indicators']['quote'][0]['volume']
+            high = parsed['chart']['result'][0]['indicators']['quote'][0]['high']
+            close = parsed['chart']['result'][0]['indicators']['quote'][0]['close']
 
-            # Combine the extracted data into a list of tuples
-            data = list(zip(Date, Low, Open, Volume, High, Close))
+            # Combine the extracted data into a DataFrame
+            df = pd.DataFrame({'date': date_list, 'low': low, 'open': open_price, 'volume': volume, 'high': high, 'close': close})
 
-            # Create a DataFrame from the list of tuples
-            df = pd.DataFrame(data, columns=['date', 'low', 'open', 'volume', 'high', 'close'])
+            # Drop duplicates based on 'date'
+            df = df.drop_duplicates(subset=['date'])
+            
+            # Convert the 'date' column to datetime objects with the correct format
+            df['date'] = pd.to_datetime(df['date'], format='%Y-%m-%d')
 
-            # Convert the 'Date' column to datetime objects with the correct format
-            df['date'] = pd.to_datetime(df['date'], format='%d-%m-%Y')
-
-            # Sort the DataFrame by the 'Date' column in ascending order
+            # Sort the DataFrame by the 'date' column in ascending order
             df = df.sort_values(by='date')
 
-            # Format the 'Date' column back to "YYYY-MM-DD"
+            # Format the 'date' column back to "YYYY-MM-DD"
             df['date'] = df['date'].dt.strftime('%Y-%m-%d')
 
             # Convert the DataFrame to a list of dictionaries and return it
