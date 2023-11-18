@@ -64,14 +64,14 @@ def get_companies_data():
     if not country or not ticker_symbols:
         return jsonify({'error': 'Country and ticker_symbols must be provided.'}), 400
 
-    query_urls = []
+    
     stock_data_objects = []
 
     try:
         results = []
 
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            tasks = [(ticker, country, query_urls, stock_data_objects) for ticker in ticker_symbols]
+            tasks = [(ticker, country, stock_data_objects) for ticker in ticker_symbols]
             futures = [executor.submit(process_stock, *task) for task in tasks]
 
             for future in concurrent.futures.as_completed(futures):

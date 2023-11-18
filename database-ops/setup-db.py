@@ -83,13 +83,14 @@ create_tables_sql = [
         "transaction_id" UUID UNIQUE,
         "stock_id" UUID,
         "ticker_symbol" VARCHAR,
-        "date" DATE UNIQUE,
+        "date" DATE,
         "low" FLOAT,
         "open" FLOAT,
         "high" FLOAT,
         "volume" BIGINT,
         "close" FLOAT,
-        PRIMARY KEY ("transaction_id","date"),
+        PRIMARY KEY ("transaction_id"),
+        CONSTRAINT "UC_Stocks_transaction_date" UNIQUE ("transaction_id", "date"),
         CONSTRAINT "FK_Stocks.stock_id"
         FOREIGN KEY ("stock_id")
             REFERENCES "CompanyInformation"("stock_id"),
@@ -114,9 +115,7 @@ create_tables_sql = [
         "200_days_ema" FLOAT,
         PRIMARY KEY ("cal_id"),
         FOREIGN KEY ("transaction_id")
-            REFERENCES "Stocks"("transaction_id"),
-        FOREIGN KEY ("date")
-            REFERENCES "Stocks"("date")
+            REFERENCES "Stocks"("transaction_id")
     )
     """,
     """
@@ -135,9 +134,7 @@ create_tables_sql = [
         "200_lower_bands" FLOAT,
         PRIMARY KEY ("cal_id"),
         FOREIGN KEY ("transaction_id")
-            REFERENCES "Stocks"("transaction_id"),
-        FOREIGN KEY ("date")
-            REFERENCES "Stocks"("date")
+            REFERENCES "Stocks"("transaction_id")
     )
     """,
     """
@@ -152,9 +149,7 @@ create_tables_sql = [
         "200_days_rsi" FLOAT,
         PRIMARY KEY ("cal_id"),
         FOREIGN KEY ("transaction_id")
-            REFERENCES "Stocks"("transaction_id"),
-        FOREIGN KEY ("date")
-            REFERENCES "Stocks"("date")
+            REFERENCES "Stocks"("transaction_id")
     )
     """
 ]
