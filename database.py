@@ -144,16 +144,7 @@ def insert_stock_data_into_db(connection, stock_data):
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
                 """
             cursor.execute(query, (transaction_id, stock_data.stock_id, stock_data.ticker_symbol, data_point['date'], data_point['low'], data_point['open'], data_point['high'], data_point['volume'], data_point['close']))
-        
         connection.commit()
-        
-        # Check the row count after the commit
-        row_count = cursor.rowcount
-        
-        if row_count > 0:
-            print(f"Successfully inserted {row_count} rows into the database.")
-        else:
-            print("No rows were inserted. Possible duplicate data.")
     except Exception as e:
         connection.rollback()
         print(f"Error inserting stock data into the database: {e}")
@@ -768,6 +759,169 @@ def update_watchlist_stocks_info(watchlist_id, updated_stocks):
     except (Exception, psycopg2.DatabaseError) as error:
         print("Error while updating watchlist stocks:", error)
         raise error
-    
+
+# ============================================================================
+
+def get_transaction_ids_and_dates(stock_id, ticker_symbol):
+    connection = create_connection()
+    cursor = connection.cursor()
+    query = """
+    SELECT "transaction_id", "date"
+    FROM "Stocks"
+    WHERE "stock_id" = %s AND "ticker_symbol" = %s
+    """
+    cursor.execute(query, (stock_id, ticker_symbol))
+
+    # Fetch all rows as a list of tuples
+    results = cursor.fetchall()
+
+    cursor.close()
+    connection.close()
+
+    return results
+
+def fetch_moving_averages_data_from_db(stock_id, ticker_symbol):
+    data = []
+    connection = None
+    cursor = None
+
+    try:
+        connection = create_connection()
+        cursor = connection.cursor()
+
+        query = """
+        SELECT "cal_id", "transaction_id", "date", "5_days_sma", "20_days_sma",
+            "50_days_sma", "200_days_sma", "5_days_ema", "20_days_ema",
+            "50_days_ema", "200_days_ema"
+        FROM "MovingAverages"
+        WHERE "stock_id" = %s AND "ticker_symbol" = %s
+        ORDER BY "date" ASC;
+        """
+
+        cursor.execute(query, (str(stock_id), str(ticker_symbol)))
+
+        # Fetch all rows and append them to the result
+        for row in cursor.fetchall():
+            cal_id, transaction_id, date, sma_5, sma_20, sma_50, sma_200, ema_5, ema_20, ema_50, ema_200 = row
+            data.append({
+                "cal_id": cal_id,
+                "transaction_id": transaction_id,
+                "date": date,  # Change "Date" to "date"
+                "5_days_sma": sma_5,
+                "20_days_sma": sma_20,
+                "50_days_sma": sma_50,
+                "200_days_sma": sma_200,
+                "5_days_ema": ema_5,
+                "20_days_ema": ema_20,
+                "50_days_ema": ema_50,
+                "200_days_ema": ema_200,
+            })
+
+    except Exception as e:
+        print(f"Error fetching moving averages data: {e}")
+        data = []  # Set data to an empty list in case of an error
+
+    finally:
+        if cursor is not None:
+            cursor.close()
+
+        if connection is not None:
+            connection.close()
+
+    return data
+
+def fetch_boillinger_bands_data_from_db(stock_id, ticker_symbol):
+    data = []
+    connection = None
+    cursor = None
+
+    try:
+        connection = create_connection()
+        cursor = connection.cursor()
+
+        query = """
+        SELECT "cal_id", "transaction_id", "date", "5_upper_band", "20_upper_band",
+            "50_upper_band", "200_upper_band", "5_lower_band", "20_lower_band",
+            "50_lower_band", "200_lower_band"
+        FROM "BoillingerBands"
+        WHERE "stock_id" = %s AND "ticker_symbol" = %s
+        ORDER BY "date" ASC;
+        """
+
+        cursor.execute(query, (str(stock_id), str(ticker_symbol)))
+
+        # Fetch all rows and append them to the result
+        for row in cursor.fetchall():
+            cal_id, transaction_id, date, upper_5, upper_20, upper_50, upper_200, lower_5, lower_20, lower_50, lower_200 = row
+            data.append({
+                "cal_id": cal_id,
+                "transaction_id": transaction_id,
+                "date": date,
+                "5_upper_band": upper_5,
+                "20_upper_band": upper_20,
+                "50_upper_band": upper_50,
+                "200_upper_band": upper_200,
+                "5_lower_band": lower_5,
+                "20_lower_band": lower_20,
+                "50_lower_band": lower_50,
+                "200_lower_band": lower_200,
+            })
+
+    except Exception as e:
+        print(f"Error fetching Boillinger Bands data: {e}")
+        data = []  # Set data to an empty list in case of an error
+
+    finally:
+        if cursor is not None:
+            cursor.close()
+
+        if connection is not None:
+            connection.close()
+
+    return data
 
 
+def fetch_relative_indexes_data_from_db(stock_id, ticker_symbol):
+    data = []
+    connection = None
+    cursor = None
+
+    try:
+        connection = create_connection()
+        cursor = connection.cursor()
+
+        query = """
+        SELECT "cal_id", "transaction_id", "date", "14_days_rsi", "20_days_rsi",
+            "50_days_rsi", "200_days_rsi"
+        FROM "RelativeIndexes"
+        WHERE "stock_id" = %s AND "ticker_symbol" = %s
+        ORDER BY "date" ASC;
+        """
+
+        cursor.execute(query, (str(stock_id), str(ticker_symbol)))
+
+        # Fetch all rows and append them to the result
+        for row in cursor.fetchall():
+            cal_id, transaction_id, date, rsi_14, rsi_20, rsi_50, rsi_200 = row
+            data.append({
+                "cal_id": cal_id,
+                "transaction_id": transaction_id,
+                "date": date,
+                "14_days_rsi": rsi_14,
+                "20_days_rsi": rsi_20,
+                "50_days_rsi": rsi_50,
+                "200_days_rsi": rsi_200,
+            })
+
+    except Exception as e:
+        print(f"Error fetching Relative Indexes data: {e}")
+        data = []  # Set data to an empty list in case of an error
+
+    finally:
+        if cursor is not None:
+            cursor.close()
+
+        if connection is not None:
+            connection.close()
+
+    return data

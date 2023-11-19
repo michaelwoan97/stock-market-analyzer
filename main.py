@@ -6,7 +6,7 @@ import os
 from functools import wraps
 from datetime import datetime, timedelta  # Import datetime and timedelta from the datetime module
 from flask import Flask, request, jsonify
-from database import delete_watchlist, find_watchlist_by_id, process_stock, create_user, find_user_by_username, find_user_by_id, find_watchlist, create_watchlist, add_stock_to_watchlist, get_watchlist, update_watchlist_info, update_watchlist_stocks_info
+from database import delete_watchlist, fetch_boillinger_bands_data_from_db, fetch_moving_averages_data_from_db, fetch_relative_indexes_data_from_db, find_watchlist_by_id, process_stock, create_user, find_user_by_username, find_user_by_id, find_watchlist, create_watchlist, add_stock_to_watchlist, get_watchlist, update_watchlist_info, update_watchlist_stocks_info
 from passlib.hash import bcrypt
 from dotenv import load_dotenv
 
@@ -18,6 +18,29 @@ app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY')
 
 # Enable debug mode
 app.debug = True
+
+def fetch_technical_analysis(stock_id, ticker_symbol):
+    moving_averages_data = fetch_moving_averages_data_from_db(stock_id, ticker_symbol)
+    boillinger_bands_data = fetch_boillinger_bands_data_from_db(stock_id, ticker_symbol)
+    relative_indexes_data = fetch_relative_indexes_data_from_db(stock_id, ticker_symbol)
+
+    technical_analysis = [
+        {'type': 'moving_averages', 'data': moving_averages_data},
+        {'type': 'boillinger_bands', 'data': boillinger_bands_data},
+        {'type': 'relative_indexes', 'data': relative_indexes_data}
+    ]
+
+    return technical_analysis
+
+def process_technical_analysis(stock_id, ticker_symbol, stock_data_objects):
+    technical_analysis_data = fetch_technical_analysis(stock_id, ticker_symbol)
+    stock_data_objects.append({
+        'stock_id': stock_id,
+        'ticker_symbol': ticker_symbol,
+        'technical_analysis': technical_analysis_data
+    })
+
+# =================================================================================================================
 
 def token_required(f):
     @wraps(f)
@@ -264,6 +287,49 @@ def update_watchlist_stocks(data, watchlist_id):
     except Exception as e:
         return jsonify({'message': f'Error updating watchlist stocks: {str(e)}'}), 500
 
+
+#====================================================================================================
+@app.route('/get_technical_analysis', methods=['POST'])
+def get_technical_analysis():
+    try:
+        data = request.get_json()
+
+        if not isinstance(data, dict) or "data" not in data:
+            raise ValueError("Invalid request data format.")
+
+        stock_data_objects = []
+
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            futures = []
+
+            for entry in data["data"]:
+                stock_id = entry.get("stock_id")
+                ticker_symbol = entry.get("ticker_symbol")
+
+                if stock_id and ticker_symbol:
+                    task = (stock_id, ticker_symbol, stock_data_objects)
+                    futures.append(executor.submit(process_technical_analysis, *task))
+
+            for future in concurrent.futures.as_completed(futures):
+                result = future.result()
+                if result:  # Check if result is not None
+                    stock_data_objects.append(result)
+
+        technical_analysis_result = []
+        for stock_data in stock_data_objects:
+            if stock_data:  # Check if stock_data is not None
+                technical_analysis_result.append({
+                    'stock_id': stock_data.get('stock_id'),
+                    'ticker_symbol': stock_data.get('ticker_symbol'),
+                    'technical_analysis': stock_data.get('technical_analysis')
+                })
+
+        return jsonify({'results': technical_analysis_result})
+
+    except (Exception, psycopg2.DatabaseError, ValueError) as error:
+        return jsonify({'error': str(error)}), 500
+
+    
 
 if __name__ == '__main__':
     app.run()

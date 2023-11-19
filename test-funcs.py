@@ -1,5 +1,6 @@
-from database import add_stock_to_watchlist, create_watchlist, delete_watchlist, find_watchlist, find_user_by_id, get_stocks_data_combined_to_csv,get_watchlist, update_stock_data_daily, update_watchlist_info, update_watchlist_stocks_info,get_stocks_data_available
-
+from database import add_stock_to_watchlist, create_watchlist, delete_watchlist, fetch_moving_averages_data_from_db, find_watchlist, find_user_by_id, get_stocks_data_combined_to_csv, get_transaction_ids_and_dates,get_watchlist, update_stock_data_daily, update_watchlist_info, update_watchlist_stocks_info,get_stocks_data_available
+import concurrent.futures
+from multiprocessing import Manager
 # # test remove watchlist
 # watchlist_id_to_delete = 'e95b2790-5aa7-4c34-97ed-24cab1d7e94f'
 # delete_watchlist(watchlist_id_to_delete)
@@ -55,5 +56,67 @@ from database import add_stock_to_watchlist, create_watchlist, delete_watchlist,
 # ]
 # update_stock_data_daily(stock_ticker_ids)
 
-print("Processing stock data and save files!!!")
-get_stocks_data_combined_to_csv()
+
+# # Step 1: Assuming 'GOOG' is a valid ticker symbol and '2d8ed716-545d-400c-ae24-e56f31fd709f' is a valid stock_id
+# stock_id = '2d8ed716-545d-400c-ae24-e56f31fd709f'
+# ticker_symbol = 'GOOG'
+
+# # Step 2: Get a list of tuples containing transaction_id and date
+# transaction_info_list = get_transaction_ids_and_dates(stock_id, ticker_symbol)
+# print(len(transaction_info_list))
+
+# # Step 3: Fetch Moving Averages data using a thread pool
+# moving_averages_data = []
+
+# def thread_worker(tuple_info):
+#     result = fetch_moving_averages_data_from_db(tuple_info)
+#     moving_averages_data.append(result)
+
+# # Use a ThreadPoolExecutor for concurrent execution
+# with concurrent.futures.ThreadPoolExecutor() as executor:
+#     executor.map(thread_worker, transaction_info_list)
+
+# print(len(moving_averages_data))
+# Print the result
+# for record in moving_averages_data:
+#     print(record)
+
+
+# # Step 1: Assuming 'GOOG' is a valid ticker symbol and '2d8ed716-545d-400c-ae24-e56f31fd709f' is a valid stock_id
+# stock_id = '2d8ed716-545d-400c-ae24-e56f31fd709f'
+# ticker_symbol = 'GOOG'
+
+# # Step 2: Get a list of tuples containing transaction_id and date
+# transaction_info_list = get_transaction_ids_and_dates(stock_id, ticker_symbol)
+# print(len(transaction_info_list))
+
+# # Step 3: Fetch Moving Averages data using a process pool with shared list
+# manager = Manager()
+# moving_averages_data = manager.list()
+
+# def process_worker(tuple_info):
+#     result = fetch_moving_averages_data_from_db(tuple_info)
+#     moving_averages_data.append(result)
+
+# # Use a ProcessPoolExecutor for concurrent execution
+# with concurrent.futures.ProcessPoolExecutor() as executor:
+#     executor.map(process_worker, transaction_info_list)
+
+# # Convert the shared list to a regular list for further processing
+# moving_averages_data = list(moving_averages_data)
+
+# print(len(moving_averages_data))
+
+
+
+# Step 1: Assuming 'GOOG' is a valid ticker symbol and '2d8ed716-545d-400c-ae24-e56f31fd709f' is a valid stock_id
+stock_id = '2d8ed716-545d-400c-ae24-e56f31fd709f'
+ticker_symbol = 'GOOG'
+
+# Step 2: Get a list of tuples containing transaction_id and date
+transaction_info_list = fetch_moving_averages_data_from_db(stock_id, ticker_symbol)
+print(len(transaction_info_list))
+
+# Print the result
+for record in transaction_info_list:
+    print(record)

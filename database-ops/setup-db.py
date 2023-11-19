@@ -104,6 +104,8 @@ create_tables_sql = [
     CREATE TABLE IF NOT EXISTS "MovingAverages" (
         "cal_id" UUID,
         "transaction_id" UUID,
+        "stock_id" UUID,
+        "ticker_symbol" VARCHAR,
         "date" DATE,
         "5_days_sma" FLOAT,
         "20_days_sma" FLOAT,
@@ -115,7 +117,9 @@ create_tables_sql = [
         "200_days_ema" FLOAT,
         PRIMARY KEY ("cal_id"),
         FOREIGN KEY ("transaction_id")
-            REFERENCES "Stocks"("transaction_id")
+            REFERENCES "Stocks"("transaction_id"),
+        FOREIGN KEY ("stock_id", "ticker_symbol")
+            REFERENCES "CompanyInformation"("stock_id", "ticker_symbol")
     )
     """,
     """
@@ -123,18 +127,22 @@ create_tables_sql = [
     CREATE TABLE IF NOT EXISTS "BoillingerBands" (
         "cal_id" UUID,
         "transaction_id" UUID,
+        "stock_id" UUID,
+        "ticker_symbol" VARCHAR,
         "date" DATE,
-        "5_upper_bands" FLOAT,
-        "20_upper_bands" FLOAT,
-        "50_upper_bands" FLOAT,
-        "200_upper_bands" FLOAT,
-        "5_lower_bands" FLOAT,
-        "20_lower_bands" FLOAT,
-        "50_lower_bands" FLOAT,
-        "200_lower_bands" FLOAT,
+        "5_upper_band" FLOAT,
+        "20_upper_band" FLOAT,
+        "50_upper_band" FLOAT,
+        "200_upper_band" FLOAT,
+        "5_lower_band" FLOAT,
+        "20_lower_band" FLOAT,
+        "50_lower_band" FLOAT,
+        "200_lower_band" FLOAT,
         PRIMARY KEY ("cal_id"),
         FOREIGN KEY ("transaction_id")
-            REFERENCES "Stocks"("transaction_id")
+            REFERENCES "Stocks"("transaction_id"),
+        FOREIGN KEY ("stock_id", "ticker_symbol")
+            REFERENCES "CompanyInformation"("stock_id", "ticker_symbol")
     )
     """,
     """
@@ -142,6 +150,8 @@ create_tables_sql = [
     CREATE TABLE IF NOT EXISTS "RelativeIndexes" (
         "cal_id" UUID,
         "transaction_id" UUID,
+        "stock_id" UUID,
+        "ticker_symbol" VARCHAR,
         "date" DATE,
         "14_days_rsi" FLOAT,
         "20_days_rsi" FLOAT,
@@ -149,7 +159,9 @@ create_tables_sql = [
         "200_days_rsi" FLOAT,
         PRIMARY KEY ("cal_id"),
         FOREIGN KEY ("transaction_id")
-            REFERENCES "Stocks"("transaction_id")
+            REFERENCES "Stocks"("transaction_id"),
+        FOREIGN KEY ("stock_id", "ticker_symbol")
+            REFERENCES "CompanyInformation"("stock_id", "ticker_symbol")
     )
     """
 ]
