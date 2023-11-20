@@ -1,5 +1,7 @@
 # Ignore Python bytecode files
 __pycache__/
+frontend/__pycache__
+schedule-tasks/__pycache__
 
 # Ignore environment-specific files
 .env
