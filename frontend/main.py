@@ -13,13 +13,7 @@ def api_request(url, data, headers):
         return {"error": str(e)}, 500
 
 # Function to display technical analysis chart
-def display_technical_analysis(stock_prices_df, technical_analysis_results, result, date_range):
-    print(stock_prices_df)
-    # Filter data within the specified date range
-    stock_prices_df = stock_prices_df[
-        (stock_prices_df['date'] >= np.datetime64(date_range[0])) & (stock_prices_df['date'] <= np.datetime64(date_range[1]))
-    ]
-
+def display_technical_analysis(stock_prices_df, technical_analysis_results, result):
     # Create an empty DataFrame to store moving averages data
     result_df = pd.DataFrame()
 
@@ -96,7 +90,12 @@ if st.sidebar.button("Get Companies Data"):
     # API request for companies data
     api_url = "http://localhost:5000/get_companies_data"
     headers = {"Content-Type": "application/json"}
-    data = {"country": country, "ticker_symbols": [symbol.strip() for symbol in ticker_symbols.split(",")]}
+    data = {
+        "country": country,
+        "ticker_symbols": [symbol.strip() for symbol in ticker_symbols.split(",")],
+        "start_date": date_range[0].strftime('%Y-%m-%d'),
+        "end_date": date_range[1].strftime('%Y-%m-%d')
+    }
 
     # Make the API request
     response_data, status_code = api_request(api_url, data, headers)
@@ -138,18 +137,15 @@ if st.sidebar.button("Get Companies Data"):
                 # Check if the technical analysis response is not empty
                 if technical_analysis_response:
                     technical_analysis_results = technical_analysis_response.get("results", [])
-                    combined_chart = display_technical_analysis(stock_prices_df, technical_analysis_results, result, date_range)
+                    combined_chart = display_technical_analysis(stock_prices_df, technical_analysis_results, result)
                     expander.plotly_chart(combined_chart, use_container_width=True, height=400)
 
             else:
-                # Display stock prices chart directly within the specified date range
-                stock_prices_within_range = stock_prices_df[
-                    (stock_prices_df['date'] >= np.datetime64(date_range[0])) & (stock_prices_df['date'] <= np.datetime64(date_range[1]))
-                ]
+                # Display stock prices chart for the entire dataset
                 fig = go.Figure()
-                fig.add_trace(go.Scatter(x=stock_prices_within_range['date'], y=stock_prices_within_range['close_prices'], mode='lines', name='Close Prices'))
+                fig.add_trace(go.Scatter(x=stock_prices_df['date'], y=stock_prices_df['close_prices'], mode='lines', name='Close Prices'))
                 fig.update_layout(title=f"{result['ticker_symbol']} - Stock Prices",
-                                  xaxis_title='Date', yaxis_title='Price')
+                                xaxis_title='Date', yaxis_title='Price')
                 expander.plotly_chart(fig, use_container_width=True, height=400)
 
-            expander.write("-" * 50)
+                expander.write("-" * 50)

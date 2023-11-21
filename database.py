@@ -1,3 +1,4 @@
+from datetime import datetime
 import json
 import os
 import uuid
@@ -185,6 +186,33 @@ def process_stock(ticker_symbol, country):
     # Close the database connection
     connection.close()
     return stock_data
+
+def filter_stock_data_by_date_range(stock_data_history, start_date, end_date):
+    """
+    Filter stock data based on a date range.
+
+    Parameters:
+    - stock_data_history: List of dictionaries representing stock data
+    - start_date: Start date of the range (format: 'YYYY-MM-DD')
+    - end_date: End date of the range (format: 'YYYY-MM-DD')
+
+    Returns:
+    - List of dictionaries representing filtered stock data
+    """
+    try:
+        start_date = datetime.strptime(start_date, '%Y-%m-%d')
+        end_date = datetime.strptime(end_date, '%Y-%m-%d')
+
+        filtered_data = [
+            entry for entry in stock_data_history
+            if start_date <= datetime.strptime(str(entry.date), '%Y-%m-%d') <= end_date
+        ]
+
+        return filtered_data
+
+    except ValueError as e:
+        print(f"Error parsing date: {e}")
+        return None
 
 
 def update_stock_data_daily(stockTickerIds):
