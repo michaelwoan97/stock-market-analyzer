@@ -29,9 +29,9 @@ google-cloud-key.json
 # files
 __pycache__
 .pytest_cache
-schedule_tasks/*.dat
-schedule_tasks/*.bak
-schedule_tasks/*.dir
+schedule-tasks/celerybeat-schedule.dat
+schedule-tasks/celerybeat-schedule.bak
+schedule-tasks/celerybeat-schedule.dir
 data-processing/stocks-data
 
 tests

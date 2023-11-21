@@ -1,9 +1,36 @@
 from datetime import datetime
 import json
+import uuid
 import pandas as pd
 import yfinance as yf
 import urllib.request
 
+# Define a class to represent price movement data
+class PriceMovement:
+    def __init__(self, transaction_id, date, low, open_price, high, volume, close):
+        self.transaction_id = transaction_id
+        self.date = date
+        self.low = low
+        self.open_price = open_price
+        self.high = high
+        self.volume = volume
+        self.close = close
+
+    def __str__(self):
+        return f"PriceMovement(transaction_id={self.transaction_id}, date={self.date}, low={self.low}, " \
+               f"open={self.open_price}, high={self.high}, volume={self.volume}, close={self.close})"
+
+    def to_dict(self):
+        return {
+            'transaction_id': self.transaction_id,
+            'date': self.date,
+            'low': self.low,
+            'open': self.open_price,
+            'high': self.high,
+            'volume': self.volume,
+            'close': self.close
+        }
+    
 def fetch_stock_data_from_url(query_url):
     try:
         # Open a connection to the URL
@@ -21,23 +48,28 @@ def fetch_stock_data_from_url(query_url):
             high = parsed['chart']['result'][0]['indicators']['quote'][0]['high']
             close = parsed['chart']['result'][0]['indicators']['quote'][0]['close']
 
-            # Combine the extracted data into a DataFrame
-            df = pd.DataFrame({'date': date_list, 'low': low, 'open': open_price, 'volume': volume, 'high': high, 'close': close})
+            # Create an array to store PriceMovement instances
+            price_movements = []
 
-            # Drop duplicates based on 'date'
-            df = df.drop_duplicates(subset=['date'])
-            
-            # Convert the 'date' column to datetime objects with the correct format
-            df['date'] = pd.to_datetime(df['date'], format='%Y-%m-%d')
+            # Combine the extracted data into PriceMovement instances
+            for i in range(len(date_list)):
+                # Generate a UUID for the 'transaction_id' column
+                transaction_id = uuid.uuid4()
 
-            # Sort the DataFrame by the 'date' column in ascending order
-            df = df.sort_values(by='date')
+                price_movement = PriceMovement(
+                    transaction_id=transaction_id,
+                    date=date_list[i],
+                    low=low[i],
+                    open_price=open_price[i],
+                    volume=volume[i],
+                    high=high[i],
+                    close=close[i]
+                )
+                price_movements.append(price_movement)
 
-            # Format the 'date' column back to "YYYY-MM-DD"
-            df['date'] = df['date'].dt.strftime('%Y-%m-%d')
+            # Convert the array of PriceMovement instances to a list and return it
+            return price_movements
 
-            # Convert the DataFrame to a list of dictionaries and return it
-            return df.to_dict(orient='records')
     except Exception as e:
         print(f"Error fetching data from Yahoo Finance: {e}")
         return None

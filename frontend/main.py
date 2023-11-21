@@ -14,6 +14,7 @@ def api_request(url, data, headers):
 
 # Function to display technical analysis chart
 def display_technical_analysis(stock_prices_df, technical_analysis_results, result, date_range):
+    print(stock_prices_df)
     # Filter data within the specified date range
     stock_prices_df = stock_prices_df[
         (stock_prices_df['date'] >= np.datetime64(date_range[0])) & (stock_prices_df['date'] <= np.datetime64(date_range[1]))

@@ -6,7 +6,7 @@ import os
 from functools import wraps
 from datetime import datetime, timedelta  # Import datetime and timedelta from the datetime module
 from flask import Flask, request, jsonify
-from database import delete_watchlist, fetch_boillinger_bands_data_from_db, fetch_moving_averages_data_from_db, fetch_relative_indexes_data_from_db, find_watchlist_by_id, process_stock, create_user, find_user_by_username, find_user_by_id, find_watchlist, create_watchlist, add_stock_to_watchlist, get_watchlist, update_watchlist_info, update_watchlist_stocks_info
+from database import StockData, delete_watchlist, fetch_boillinger_bands_data_from_db, fetch_moving_averages_data_from_db, fetch_relative_indexes_data_from_db, find_watchlist_by_id, process_stock, create_user, find_user_by_username, find_user_by_id, find_watchlist, create_watchlist, add_stock_to_watchlist, get_watchlist, update_watchlist_info, update_watchlist_stocks_info
 from passlib.hash import bcrypt
 from dotenv import load_dotenv
 
@@ -87,28 +87,30 @@ def get_companies_data():
     if not country or not ticker_symbols:
         return jsonify({'error': 'Country and ticker_symbols must be provided.'}), 400
 
-    
-    stock_data_objects = []
 
     try:
-        results = []
+        stock_data_result = []
 
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            tasks = [(ticker, country, stock_data_objects) for ticker in ticker_symbols]
+            tasks = [(ticker, country) for ticker in ticker_symbols]
             futures = [executor.submit(process_stock, *task) for task in tasks]
 
             for future in concurrent.futures.as_completed(futures):
                 result = future.result()
-                results.append(result)
+                stock_data_result.append({
+                    'ticker_symbol': result.ticker_symbol,
+                    'country': result.country,
+                    'stock_id': result.stock_id,
+                    'data': [price_movement.to_dict() for price_movement in result.data]
+                })
 
-        stock_data_result = []
-        for stock_data in stock_data_objects:
-            stock_data_result.append({
-                'ticker_symbol': stock_data.ticker_symbol,
-                'country': stock_data.country,
-                'stock_id': stock_data.stock_id,
-                'data': stock_data.data  # Only return the first three data points
-            })
+        # for stock_data in results:
+        #     stock_data_result.append({
+        #         'ticker_symbol': stock_data.ticker_symbol,
+        #         'country': stock_data.country,
+        #         'stock_id': stock_data.stock_id,
+        #         'data': [price_movement.to_dict() for price_movement in stock_data.data]
+        #     })
 
         return jsonify({'results': stock_data_result})
 
