@@ -2,6 +2,7 @@ from datetime import datetime
 import json
 import os
 import uuid
+from matplotlib import ticker
 import pandas as pd
 import psycopg2
 import yfinance
@@ -937,6 +938,115 @@ def fetch_relative_indexes_data_from_db(stock_id, ticker_symbol):
 
     except Exception as e:
         print(f"Error fetching Relative Indexes data: {e}")
+        data = []  # Set data to an empty list in case of an error
+
+    finally:
+        if cursor is not None:
+            cursor.close()
+
+        if connection is not None:
+            connection.close()
+
+    return data
+
+def fetch_technical_data(stock_id, ticker_symbol, start_date=None, end_date=None):
+    data = []
+    connection = None
+    cursor = None
+
+    try:
+        connection = create_connection()
+        cursor = connection.cursor()
+
+        # Construct the query with optional date range conditions
+        query = """
+            SELECT
+                S."stock_id",
+                S."ticker_symbol",
+                S."date",
+                S."close",
+                BB."5_days_sma" AS "bb_5_days_sma",
+                BB."20_days_sma" AS "bb_20_days_sma",
+                BB."50_days_sma" AS "bb_50_days_sma",
+                BB."200_days_sma" AS "bb_200_days_sma",
+                BB."5_days_ema" AS "bb_5_days_ema",
+                BB."20_days_ema" AS "bb_20_days_ema",
+                BB."50_days_ema" AS "bb_50_days_ema",
+                BB."200_days_ema" AS "bb_200_days_ema",
+                BB."5_upper_band" AS "bb_5_upper_band",
+                BB."5_lower_band" AS "bb_5_lower_band",
+                BB."20_upper_band" AS "bb_20_upper_band",
+                BB."20_lower_band" AS "bb_20_lower_band",
+                BB."50_upper_band" AS "bb_50_upper_band",
+                BB."50_lower_band" AS "bb_50_lower_band",
+                BB."200_upper_band" AS "bb_200_upper_band",
+                BB."200_lower_band" AS "bb_200_lower_band",
+                MA."5_days_sma" AS "ma_5_days_sma",
+                MA."20_days_sma" AS "ma_20_days_sma",
+                MA."50_days_sma" AS "ma_50_days_sma",
+                MA."200_days_sma" AS "ma_200_days_sma",
+                MA."5_days_ema" AS "ma_5_days_ema",
+                MA."20_days_ema" AS "ma_20_days_ema",
+                MA."50_days_ema" AS "ma_50_days_ema",
+                MA."200_days_ema" AS "ma_200_days_ema",
+                RI."5_days_sma" AS "ri_5_days_sma",
+                RI."20_days_sma" AS "ri_20_days_sma",
+                RI."50_days_sma" AS "ri_50_days_sma",
+                RI."200_days_sma" AS "ri_200_days_sma",
+                RI."5_days_ema" AS "ri_5_days_ema",
+                RI."20_days_ema" AS "ri_20_days_sma",
+                RI."50_days_ema" AS "ri_50_days_ema",
+                RI."200_days_ema" AS "ri_200_days_ema",
+                RI."5_upper_band" AS "ri_5_upper_band",
+                RI."5_lower_band" AS "ri_5_lower_band",
+                RI."20_upper_band" AS "ri_20_upper_band",
+                RI."20_lower_band" AS "ri_20_lower_band",
+                RI."50_upper_band" AS "ri_50_upper_band",
+                RI."50_lower_band" AS "ri_50_lower_band",
+                RI."200_upper_band" AS "ri_200_upper_band",
+                RI."200_lower_band" AS "ri_200_lower_band",
+                RI."14_days_rsi",
+                RI."20_days_rsi",
+                RI."50_days_rsi",
+                RI."200_days_rsi"
+            FROM
+                "Stocks" S
+            INNER JOIN
+                "BoillingerBands" BB ON S."stock_id" = BB."stock_id"::uuid AND S."date" = BB."date"
+            INNER JOIN
+                "MovingAverages" MA ON S."stock_id" = MA."stock_id"::uuid AND S."date" = MA."date"
+            INNER JOIN
+                "RelativeIndexes" RI ON S."stock_id" = RI."stock_id"::uuid AND S."date" = RI."date"
+        """
+
+        # Add optional date range conditions
+        if start_date is not None:
+            query += f'WHERE S."date" >= %s '
+        if end_date is not None:
+            query += f'AND S."date" <= %s '
+
+        # Add condition to filter by stock_id
+        query += 'AND S."stock_id" = %s::uuid '
+
+        query += 'ORDER BY S."date" ASC LIMIT 10;'
+
+        # Execute the query with parameters
+        if start_date is not None and end_date is not None:
+            cursor.execute(query, (start_date, end_date, stock_id))
+        else:
+            cursor.execute(query, (stock_id,))
+
+        # Fetch all rows and append them to the result
+        for row in cursor.fetchall():
+            # Extract values from the row
+            # ...
+
+            # Append values to the data list
+            # ...
+            print(row)  # Print the row
+
+    except Exception as e:
+        print(f"Error fetching technical data: {e}")
         data = []  # Set data to an empty list in case of an error
 
     finally:

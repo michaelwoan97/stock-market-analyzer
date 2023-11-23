@@ -1,4 +1,4 @@
-from database import add_stock_to_watchlist, create_watchlist, delete_watchlist, fetch_moving_averages_data_from_db, find_watchlist, find_user_by_id, get_stocks_data_combined_to_csv, get_transaction_ids_and_dates,get_watchlist, update_stock_data_daily, update_watchlist_info, update_watchlist_stocks_info,get_stocks_data_available
+from database import add_stock_to_watchlist, create_watchlist, delete_watchlist, fetch_moving_averages_data_from_db, fetch_technical_data, find_watchlist, find_user_by_id, get_stocks_data_combined_to_csv, get_transaction_ids_and_dates,get_watchlist, update_stock_data_daily, update_watchlist_info, update_watchlist_stocks_info,get_stocks_data_available
 import concurrent.futures
 from multiprocessing import Manager
 # # test remove watchlist
@@ -110,13 +110,24 @@ from multiprocessing import Manager
 
 
 # Step 1: Assuming 'GOOG' is a valid ticker symbol and '2d8ed716-545d-400c-ae24-e56f31fd709f' is a valid stock_id
-stock_id = '2d8ed716-545d-400c-ae24-e56f31fd709f'
-ticker_symbol = 'GOOG'
+# stock_id = '2d8ed716-545d-400c-ae24-e56f31fd709f'
+# ticker_symbol = 'GOOG'
 
-# Step 2: Get a list of tuples containing transaction_id and date
-transaction_info_list = fetch_moving_averages_data_from_db(stock_id, ticker_symbol)
-print(len(transaction_info_list))
+# # Step 2: Get a list of tuples containing transaction_id and date
+# transaction_info_list = fetch_moving_averages_data_from_db(stock_id, ticker_symbol)
+# print(len(transaction_info_list))
+
+# # Print the result
+# for record in transaction_info_list:
+#     print(record)
+
+# Replace these with actual stock_id and ticker_symbol values from your database
+test_stock_id = "d30dc554-d8e3-4b65-a516-19129f46e798"
+test_ticker_symbol = "AAPL"
+test_start_date = "2020-11-22"
+test_end_date = "2023-11-16"
+# Call the function
+result = fetch_technical_data(test_stock_id, test_ticker_symbol, test_start_date, test_end_date)
 
 # Print the result
-for record in transaction_info_list:
-    print(record)
+# print(result)

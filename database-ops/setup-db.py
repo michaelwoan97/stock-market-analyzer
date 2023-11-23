@@ -163,8 +163,28 @@ create_tables_sql = [
         FOREIGN KEY ("stock_id", "ticker_symbol")
             REFERENCES "CompanyInformation"("stock_id", "ticker_symbol")
     )
+    """,
+    """
+    -- Index for Stocks table
+    CREATE INDEX IF NOT EXISTS "idx_stocks_date" ON "Stocks"("date")
+    """,
+    """
+    -- Indexes for MovingAverages table
+    CREATE INDEX IF NOT EXISTS "idx_ma_stock_id_ticker_symbol_date" ON "MovingAverages"("stock_id", "ticker_symbol", "date")
+    CREATE INDEX IF NOT EXISTS "idx_ma_date" ON "MovingAverages"("date")
+    """,
+    """
+    -- Indexes for BoillingerBands table
+    CREATE INDEX IF NOT EXISTS "idx_bb_stock_id_ticker_symbol_date" ON "BoillingerBands"("stock_id", "ticker_symbol", "date")
+    CREATE INDEX IF NOT EXISTS "idx_bb_date" ON "BoillingerBands"("date")
+    """,
+    """
+    -- Indexes for RelativeIndexes table
+    CREATE INDEX IF NOT EXISTS "idx_ri_stock_id_ticker_symbol_date" ON "RelativeIndexes"("stock_id", "ticker_symbol", "date")
+    CREATE INDEX IF NOT EXISTS "idx_ri_date" ON "RelativeIndexes"("date")
     """
 ]
+
 
 
 # Establish a connection to the default 'postgres' database to create a new database
