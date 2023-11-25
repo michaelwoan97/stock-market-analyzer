@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 import os
 import uuid
@@ -6,6 +6,7 @@ from matplotlib import ticker
 import pandas as pd
 import psycopg2
 import yfinance
+from psycopg2 import sql 
 from finance import fetch_stock_data_from_url, PriceMovement
 from dotenv import load_dotenv
 
@@ -61,6 +62,7 @@ def create_connection():
         print(f"Error connecting to the database: {e.with_traceback}")
         # You can choose to handle the error or re-raise it here
         raise e
+
 
 def get_stocks_ticker_id_exist():
     connection = create_connection()
@@ -949,7 +951,66 @@ def fetch_relative_indexes_data_from_db(stock_id, ticker_symbol):
 
     return data
 
-def fetch_technical_data(stock_id, ticker_symbol, start_date=None, end_date=None):
+
+def get_date_range_for_view(view_name):
+    conn = create_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT start_date, end_date FROM view_date_ranges WHERE view_name = %s;", (view_name,))
+            result = cursor.fetchone()
+            return result  # This will be (start_date, end_date) or None if the view_name is not found
+    finally:
+        conn.close()
+
+def get_view_date_range(conn, view_name):
+    with conn.cursor() as cursor:
+        # Retrieve the date range for the given view
+        cursor.execute(
+            "SELECT start_date, end_date FROM public.views_date_ranges WHERE view_name = %s",
+            (view_name,)
+        )
+        date_range = cursor.fetchone()
+        return date_range if date_range else (None, None)
+
+def create_view_date_range_table(conn):
+    with conn.cursor() as cursor:
+        # Check if the table exists
+        cursor.execute("SELECT to_regclass('public.views_date_ranges')")
+        table_exists = cursor.fetchone()[0]
+
+        if not table_exists:
+            # If it doesn't exist, create the table
+            create_table_sql = """
+                CREATE TABLE public.views_date_ranges (
+                    view_name VARCHAR(255) PRIMARY KEY,
+                    start_date DATE,
+                    end_date DATE
+                );
+            """
+            cursor.execute(create_table_sql)
+
+            # Commit the changes
+            conn.commit()
+
+def update_view_date_range(conn, view_name, start_date, end_date):
+    with conn.cursor() as cursor:
+        # Update or insert the date range for the given view
+        upsert_sql = """
+            INSERT INTO public.views_date_ranges (view_name, start_date, end_date)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (view_name) DO UPDATE
+            SET start_date = EXCLUDED.start_date, end_date = EXCLUDED.end_date;
+        """
+        cursor.execute(upsert_sql, (view_name, start_date, end_date))
+
+        # Commit the changes
+        conn.commit()
+
+def check_date_range_overlap(existing_start, existing_end, requested_start, requested_end):
+    # Check if there is an overlap between two date ranges
+    return existing_start <= requested_end and existing_end >= requested_start
+
+def get_stock_technical_data_from_tables(stock_id, start_date=None, end_date=None):
     data = []
     connection = None
     cursor = None
@@ -965,22 +1026,6 @@ def fetch_technical_data(stock_id, ticker_symbol, start_date=None, end_date=None
                 S."ticker_symbol",
                 S."date",
                 S."close",
-                BB."5_days_sma" AS "bb_5_days_sma",
-                BB."20_days_sma" AS "bb_20_days_sma",
-                BB."50_days_sma" AS "bb_50_days_sma",
-                BB."200_days_sma" AS "bb_200_days_sma",
-                BB."5_days_ema" AS "bb_5_days_ema",
-                BB."20_days_ema" AS "bb_20_days_ema",
-                BB."50_days_ema" AS "bb_50_days_ema",
-                BB."200_days_ema" AS "bb_200_days_ema",
-                BB."5_upper_band" AS "bb_5_upper_band",
-                BB."5_lower_band" AS "bb_5_lower_band",
-                BB."20_upper_band" AS "bb_20_upper_band",
-                BB."20_lower_band" AS "bb_20_lower_band",
-                BB."50_upper_band" AS "bb_50_upper_band",
-                BB."50_lower_band" AS "bb_50_lower_band",
-                BB."200_upper_band" AS "bb_200_upper_band",
-                BB."200_lower_band" AS "bb_200_lower_band",
                 MA."5_days_sma" AS "ma_5_days_sma",
                 MA."20_days_sma" AS "ma_20_days_sma",
                 MA."50_days_sma" AS "ma_50_days_sma",
@@ -989,26 +1034,18 @@ def fetch_technical_data(stock_id, ticker_symbol, start_date=None, end_date=None
                 MA."20_days_ema" AS "ma_20_days_ema",
                 MA."50_days_ema" AS "ma_50_days_ema",
                 MA."200_days_ema" AS "ma_200_days_ema",
-                RI."5_days_sma" AS "ri_5_days_sma",
-                RI."20_days_sma" AS "ri_20_days_sma",
-                RI."50_days_sma" AS "ri_50_days_sma",
-                RI."200_days_sma" AS "ri_200_days_sma",
-                RI."5_days_ema" AS "ri_5_days_ema",
-                RI."20_days_ema" AS "ri_20_days_sma",
-                RI."50_days_ema" AS "ri_50_days_ema",
-                RI."200_days_ema" AS "ri_200_days_ema",
-                RI."5_upper_band" AS "ri_5_upper_band",
-                RI."5_lower_band" AS "ri_5_lower_band",
-                RI."20_upper_band" AS "ri_20_upper_band",
-                RI."20_lower_band" AS "ri_20_lower_band",
-                RI."50_upper_band" AS "ri_50_upper_band",
-                RI."50_lower_band" AS "ri_50_lower_band",
-                RI."200_upper_band" AS "ri_200_upper_band",
-                RI."200_lower_band" AS "ri_200_lower_band",
-                RI."14_days_rsi",
-                RI."20_days_rsi",
-                RI."50_days_rsi",
-                RI."200_days_rsi"
+                BB."5_upper_band" AS "bb_5_upper_band",
+                BB."5_lower_band" AS "bb_5_lower_band",
+                BB."20_upper_band" AS "bb_20_upper_band",
+                BB."20_lower_band" AS "bb_20_lower_band",
+                BB."50_upper_band" AS "bb_50_upper_band",
+                BB."50_lower_band" AS "bb_50_lower_band",
+                BB."200_upper_band" AS "bb_200_upper_band",
+                BB."200_lower_band" AS "bb_200_lower_band",
+                RI."14_days_rsi" AS "ri_14_days_rsi",
+                RI."20_days_rsi" AS "ri_20_days_rsi,
+                RI."50_days_rsi" AS "ri_50_days_rsi,
+                RI."200_days_rsi"AS "ri_200_days_rsi"
             FROM
                 "Stocks" S
             INNER JOIN
@@ -1057,3 +1094,173 @@ def fetch_technical_data(stock_id, ticker_symbol, start_date=None, end_date=None
             connection.close()
 
     return data
+
+def create_or_refresh_materialized_view_with_partition():
+    conn = create_connection()
+    try:
+        # Calculate start and end dates dynamically (e.g., 10 years from now)
+        current_date = datetime.now()
+        start_date = current_date - timedelta(days=365 * 10)
+        end_date = current_date
+
+        # Open a cursor to perform database operations
+        with conn.cursor() as cursor:
+            # Create the views_date_ranges table if it doesn't exist
+            create_view_date_range_table(conn)
+
+            # Check if the materialized view exists
+            cursor.execute(
+                "SELECT 1 FROM pg_matviews WHERE matviewname = 'stock_technical_view'"
+            )
+            view_exists = cursor.fetchone()
+
+            if not view_exists:
+                # If it doesn't exist, create the materialized view
+                create_view_sql = """
+                    CREATE MATERIALIZED VIEW stock_technical_view AS
+                    SELECT
+                        S."stock_id",
+                        S."ticker_symbol",
+                        S."date",
+                        S."close",
+                        MA."5_days_sma" AS "ma_5_days_sma",
+                        MA."20_days_sma" AS "ma_20_days_sma",
+                        MA."50_days_sma" AS "ma_50_days_sma",
+                        MA."200_days_sma" AS "ma_200_days_sma",
+                        MA."5_days_ema" AS "ma_5_days_ema",
+                        MA."20_days_ema" AS "ma_20_days_ema",
+                        MA."50_days_ema" AS "ma_50_days_ema",
+                        MA."200_days_ema" AS "ma_200_days_ema",
+                        BB."5_upper_band" AS "bb_5_upper_band",
+                        BB."5_lower_band" AS "bb_5_lower_band",
+                        BB."20_upper_band" AS "bb_20_upper_band",
+                        BB."20_lower_band" AS "bb_20_lower_band",
+                        BB."50_upper_band" AS "bb_50_upper_band",
+                        BB."50_lower_band" AS "bb_50_lower_band",
+                        BB."200_upper_band" AS "bb_200_upper_band",
+                        BB."200_lower_band" AS "bb_200_lower_band",
+                        RI."14_days_rsi" AS "ri_14_days_rsi",
+                        RI."20_days_rsi" AS "ri_20_days_rsi,
+                        RI."50_days_rsi" AS "ri_50_days_rsi,
+                        RI."200_days_rsi"AS "ri_200_days_rsi"
+                    FROM
+                        "Stocks" S
+                    INNER JOIN
+                        "BoillingerBands" BB ON S.stock_id = BB.stock_id::uuid AND S.date = BB.date
+                    INNER JOIN
+                        "MovingAverages" MA ON S.stock_id = MA.stock_id::uuid AND S.date = MA.date
+                    INNER JOIN
+                        "RelativeIndexes" RI ON S.stock_id = RI.stock_id::uuid AND S.date = RI.date
+                    WHERE
+                        S.date >= %s AND S.date <= %s
+                    ORDER BY
+                        S.date DESC;
+                """
+                cursor.execute(create_view_sql, (start_date, end_date))
+
+                # Create indexes
+                create_indexes_sql = """
+                    CREATE INDEX idx_materialized_view_combined ON stock_technical_view(stock_id, ticker_symbol, date);
+                    CREATE INDEX idx_materialized_view_date ON stock_technical_view(date);
+                """
+                cursor.execute(create_indexes_sql)
+
+            else:
+                # If it exists, refresh the materialized view
+                refresh_view_sql = "REFRESH MATERIALIZED VIEW stock_technical_view;"
+                cursor.execute(refresh_view_sql)
+
+        # Update the date range for the view
+        update_view_date_range(conn, 'stock_technical_view', start_date, end_date)
+
+        # Commit the changes
+        conn.commit()
+
+    except Exception as e:
+        print(f"Error: {e}")
+
+    finally:
+        # Close the connection
+        conn.close()
+
+def get_stock_technical_data_from_view(start_date, end_date):
+    conn = create_connection()
+    try:
+        with conn.cursor() as cursor:
+            # Select data from stock_technical_view based on the date range
+            select_data_sql = """
+                SELECT
+                    "stock_id",
+                    "ticker_symbol",
+                    "date",
+                    "close",
+                    "bb_5_days_sma",
+                    "bb_20_days_sma",
+                    "bb_50_days_sma",
+                    "bb_200_days_sma",
+                    "bb_5_days_ema",
+                    "bb_20_days_ema",
+                    "bb_50_days_ema",
+                    "bb_200_days_ema",
+                    "bb_5_upper_band",
+                    "bb_5_lower_band",
+                    "bb_20_upper_band",
+                    "bb_20_lower_band",
+                    "bb_50_upper_band",
+                    "bb_50_lower_band",
+                    "bb_200_upper_band",
+                    "bb_200_lower_band",
+                    "ma_5_days_sma",
+                    "ma_20_days_sma",
+                    "ma_50_days_sma",
+                    "ma_200_days_sma",
+                    "ma_5_days_ema",
+                    "ma_20_days_ema",
+                    "ma_50_days_ema",
+                    "ma_200_days_ema",
+                    "ri_5_days_sma",
+                    "ri_20_days_sma",
+                    "ri_50_days_sma",
+                    "ri_200_days_sma",
+                    "ri_5_days_ema",
+                    "ri_20_days_ema",
+                    "ri_50_days_ema",
+                    "ri_200_days_ema",
+                    "ri_5_upper_band",
+                    "ri_5_lower_band",
+                    "ri_20_upper_band",
+                    "ri_20_lower_band",
+                    "ri_50_upper_band",
+                    "ri_50_lower_band",
+                    "ri_200_upper_band",
+                    "ri_200_lower_band",
+                    "ri_14_days_rsi",
+                    "ri_20_days_rsi",
+                    "ri_50_days_rsi",
+                    "ri_200_days_rsi"
+                FROM
+                    stock_technical_view
+                WHERE
+                    "date" >= %s AND "date" <= %s
+                ORDER BY
+                    "date" DESC;
+            """
+            cursor.execute(select_data_sql, (start_date, end_date))
+            result = cursor.fetchall()
+            return result
+
+    except Exception as e:
+        print(f"Error: {e}")
+
+    finally:
+        conn.close()
+
+def execute_sql(connection, sql_statements):
+    try:
+        with connection.cursor() as cursor:
+            for sql_statement in sql_statements:
+                cursor.execute(sql_statement)
+        connection.commit()
+        print("SQL statements executed successfully.")
+    except Exception as e:
+        print(f"Error: Unable to execute SQL statements. {e}")
