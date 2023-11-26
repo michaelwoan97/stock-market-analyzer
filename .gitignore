@@ -32,6 +32,7 @@ __pycache__
 schedule-tasks/celerybeat-schedule
 data-processing/stocks-data
 test-sql.sql
+test-funcs.py
 tests
 todo.txt
 

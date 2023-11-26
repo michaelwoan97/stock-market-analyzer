@@ -63,6 +63,15 @@ def create_connection():
         # You can choose to handle the error or re-raise it here
         raise e
 
+def execute_sql(connection, sql_statements):
+    try:
+        with connection.cursor() as cursor:
+            for sql_statement in sql_statements:
+                cursor.execute(sql_statement)
+        connection.commit()
+        print("SQL statements executed successfully.")
+    except Exception as e:
+        print(f"Error: Unable to execute SQL statements. {e}")
 
 def get_stocks_ticker_id_exist():
     connection = create_connection()
@@ -1011,6 +1020,11 @@ def check_date_range_overlap(existing_start, existing_end, requested_start, requ
     return existing_start <= requested_end and existing_end >= requested_start
 
 def get_stock_technical_data_from_tables(stock_id, start_date=None, end_date=None):
+    # Format start_date and end_date if they are provided
+    formatted_start_date = start_date.strftime('%Y-%m-%d') if start_date else None
+    formatted_end_date = end_date.strftime('%Y-%m-%d') if end_date else None
+    
+    print(f'{formatted_start_date} is start date and {formatted_end_date} is end date')
     data = []
     connection = None
     cursor = None
@@ -1042,19 +1056,19 @@ def get_stock_technical_data_from_tables(stock_id, start_date=None, end_date=Non
                 BB."50_lower_band" AS "bb_50_lower_band",
                 BB."200_upper_band" AS "bb_200_upper_band",
                 BB."200_lower_band" AS "bb_200_lower_band",
-                RI."14_days_rsi" AS "ri_14_days_rsi",
-                RI."20_days_rsi" AS "ri_20_days_rsi,
-                RI."50_days_rsi" AS "ri_50_days_rsi,
-                RI."200_days_rsi"AS "ri_200_days_rsi"
+                RI."14_days_rsi",
+                RI."20_days_rsi",
+                RI."50_days_rsi",
+                RI."200_days_rsi"
             FROM
                 "Stocks" S
             INNER JOIN
-                "BoillingerBands" BB ON S."stock_id" = BB."stock_id"::uuid AND S."date" = BB."date"
+                "MovingAverages" MA ON S."stock_id" = MA."stock_id" AND S."date" = MA."date"
             INNER JOIN
-                "MovingAverages" MA ON S."stock_id" = MA."stock_id"::uuid AND S."date" = MA."date"
+                "BoillingerBands" BB ON S."stock_id" = BB."stock_id" AND S."date" = BB."date"
             INNER JOIN
-                "RelativeIndexes" RI ON S."stock_id" = RI."stock_id"::uuid AND S."date" = RI."date"
-        """
+                "RelativeIndexes" RI ON S."stock_id" = RI."stock_id" AND S."date" = RI."date"
+            """
 
         # Add optional date range conditions
         if start_date is not None:
@@ -1063,25 +1077,17 @@ def get_stock_technical_data_from_tables(stock_id, start_date=None, end_date=Non
             query += f'AND S."date" <= %s '
 
         # Add condition to filter by stock_id
-        query += 'AND S."stock_id" = %s::uuid '
+        query += 'AND S."stock_id" = %s '
 
         query += 'ORDER BY S."date" ASC LIMIT 10;'
-
+        
         # Execute the query with parameters
         if start_date is not None and end_date is not None:
-            cursor.execute(query, (start_date, end_date, stock_id))
+            cursor.execute(query, (formatted_start_date, formatted_end_date, stock_id))
         else:
             cursor.execute(query, (stock_id,))
 
-        # Fetch all rows and append them to the result
-        for row in cursor.fetchall():
-            # Extract values from the row
-            # ...
-
-            # Append values to the data list
-            # ...
-            print(row)  # Print the row
-
+        data = cursor.fetchall()
     except Exception as e:
         print(f"Error fetching technical data: {e}")
         data = []  # Set data to an empty list in case of an error
@@ -1139,16 +1145,16 @@ def create_or_refresh_materialized_view_with_partition():
                         BB."50_lower_band" AS "bb_50_lower_band",
                         BB."200_upper_band" AS "bb_200_upper_band",
                         BB."200_lower_band" AS "bb_200_lower_band",
-                        RI."14_days_rsi" AS "ri_14_days_rsi",
-                        RI."20_days_rsi" AS "ri_20_days_rsi,
-                        RI."50_days_rsi" AS "ri_50_days_rsi,
-                        RI."200_days_rsi"AS "ri_200_days_rsi"
+                        RI."14_days_rsi",
+                        RI."20_days_rsi",
+                        RI."50_days_rsi",
+                        RI."200_days_rsi"
                     FROM
                         "Stocks" S
                     INNER JOIN
-                        "BoillingerBands" BB ON S.stock_id = BB.stock_id::uuid AND S.date = BB.date
-                    INNER JOIN
                         "MovingAverages" MA ON S.stock_id = MA.stock_id::uuid AND S.date = MA.date
+                    INNER JOIN
+                        "BoillingerBands" BB ON S.stock_id = BB.stock_id::uuid AND S.date = BB.date
                     INNER JOIN
                         "RelativeIndexes" RI ON S.stock_id = RI.stock_id::uuid AND S.date = RI.date
                     WHERE
@@ -1194,22 +1200,6 @@ def get_stock_technical_data_from_view(start_date, end_date):
                     "ticker_symbol",
                     "date",
                     "close",
-                    "bb_5_days_sma",
-                    "bb_20_days_sma",
-                    "bb_50_days_sma",
-                    "bb_200_days_sma",
-                    "bb_5_days_ema",
-                    "bb_20_days_ema",
-                    "bb_50_days_ema",
-                    "bb_200_days_ema",
-                    "bb_5_upper_band",
-                    "bb_5_lower_band",
-                    "bb_20_upper_band",
-                    "bb_20_lower_band",
-                    "bb_50_upper_band",
-                    "bb_50_lower_band",
-                    "bb_200_upper_band",
-                    "bb_200_lower_band",
                     "ma_5_days_sma",
                     "ma_20_days_sma",
                     "ma_50_days_sma",
@@ -1218,26 +1208,18 @@ def get_stock_technical_data_from_view(start_date, end_date):
                     "ma_20_days_ema",
                     "ma_50_days_ema",
                     "ma_200_days_ema",
-                    "ri_5_days_sma",
-                    "ri_20_days_sma",
-                    "ri_50_days_sma",
-                    "ri_200_days_sma",
-                    "ri_5_days_ema",
-                    "ri_20_days_ema",
-                    "ri_50_days_ema",
-                    "ri_200_days_ema",
-                    "ri_5_upper_band",
-                    "ri_5_lower_band",
-                    "ri_20_upper_band",
-                    "ri_20_lower_band",
-                    "ri_50_upper_band",
-                    "ri_50_lower_band",
-                    "ri_200_upper_band",
-                    "ri_200_lower_band",
-                    "ri_14_days_rsi",
-                    "ri_20_days_rsi",
-                    "ri_50_days_rsi",
-                    "ri_200_days_rsi"
+                    "bb_5_upper_band",
+                    "bb_5_lower_band",
+                    "bb_20_upper_band",
+                    "bb_20_lower_band",
+                    "bb_50_upper_band",
+                    "bb_50_lower_band",
+                    "bb_200_upper_band",
+                    "bb_200_lower_band",
+                    "14_days_rsi",
+                    "20_days_rsi",
+                    "50_days_rsi",
+                    "200_days_rsi"
                 FROM
                     stock_technical_view
                 WHERE
@@ -1254,13 +1236,3 @@ def get_stock_technical_data_from_view(start_date, end_date):
 
     finally:
         conn.close()
-
-def execute_sql(connection, sql_statements):
-    try:
-        with connection.cursor() as cursor:
-            for sql_statement in sql_statements:
-                cursor.execute(sql_statement)
-        connection.commit()
-        print("SQL statements executed successfully.")
-    except Exception as e:
-        print(f"Error: Unable to execute SQL statements. {e}")
