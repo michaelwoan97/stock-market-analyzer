@@ -6,7 +6,7 @@ import os
 from functools import wraps
 from datetime import datetime, timedelta  # Import datetime and timedelta from the datetime module
 from flask import Flask, request, jsonify
-from database import StockData, delete_watchlist, fetch_boillinger_bands_data_from_db, fetch_moving_averages_data_from_db, fetch_relative_indexes_data_from_db, filter_stock_data_by_date_range, find_watchlist_by_id, process_stock, create_user, find_user_by_username, find_user_by_id, find_watchlist, create_watchlist, add_stock_to_watchlist, get_watchlist, update_watchlist_info, update_watchlist_stocks_info
+from database import StockData, delete_watchlist, fetch_boillinger_bands_data_from_db, fetch_moving_averages_data_from_db, fetch_relative_indexes_data_from_db, filter_stock_data_by_date_range, find_watchlist_by_id, process_stock, create_user, find_user_by_username, find_user_by_id, find_watchlist, create_watchlist, add_stock_to_watchlist, get_watchlist, process_technical_analysis, update_watchlist_info, update_watchlist_stocks_info
 from passlib.hash import bcrypt
 from dotenv import load_dotenv
 
@@ -32,13 +32,6 @@ def fetch_technical_analysis(stock_id, ticker_symbol):
 
     return technical_analysis
 
-def process_technical_analysis(stock_id, ticker_symbol, stock_data_objects):
-    technical_analysis_data = fetch_technical_analysis(stock_id, ticker_symbol)
-    stock_data_objects.append({
-        'stock_id': stock_id,
-        'ticker_symbol': ticker_symbol,
-        'technical_analysis': technical_analysis_data
-    })
 
 # =================================================================================================================
 
@@ -296,7 +289,14 @@ def get_technical_analysis():
         if not isinstance(data, dict) or "data" not in data:
             raise ValueError("Invalid request data format.")
 
-        stock_data_objects = []
+        start_date = data.get("start_date")
+        end_date = data.get("end_date")
+
+        # Handle errors for start_date and end_date extraction
+        if start_date is None or end_date is None:
+            raise ValueError("Both start_date and end_date are required.")
+
+        technical_analysis_result = []
 
         with concurrent.futures.ThreadPoolExecutor() as executor:
             futures = []
@@ -306,23 +306,15 @@ def get_technical_analysis():
                 ticker_symbol = entry.get("ticker_symbol")
 
                 if stock_id and ticker_symbol:
-                    task = (stock_id, ticker_symbol, stock_data_objects)
+                    task = (stock_id, ticker_symbol, start_date, end_date)
                     futures.append(executor.submit(process_technical_analysis, *task))
 
             for future in concurrent.futures.as_completed(futures):
                 result = future.result()
                 if result:  # Check if result is not None
-                    stock_data_objects.append(result)
-
-        technical_analysis_result = []
-        for stock_data in stock_data_objects:
-            if stock_data:  # Check if stock_data is not None
-                technical_analysis_result.append({
-                    'stock_id': stock_data.get('stock_id'),
-                    'ticker_symbol': stock_data.get('ticker_symbol'),
-                    'technical_analysis': stock_data.get('technical_analysis')
-                })
-
+                    technical_analysis_result.append(result)
+        for t in technical_analysis_result:
+            print(t['stock_id'] + t['ticker_symbol'])
         return jsonify({'results': technical_analysis_result})
 
     except (Exception, psycopg2.DatabaseError, ValueError) as error:

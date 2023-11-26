@@ -979,7 +979,14 @@ def get_view_date_range(conn, view_name):
             (view_name,)
         )
         date_range = cursor.fetchone()
-        return date_range if date_range else (None, None)
+
+        if date_range:
+            start_date, end_date = date_range
+            formatted_start_date = start_date.strftime("%Y-%m-%d") if start_date else None
+            formatted_end_date = end_date.strftime("%Y-%m-%d") if end_date else None
+            return formatted_start_date, formatted_end_date
+        else:
+            return None, None
 
 def create_view_date_range_table(conn):
     with conn.cursor() as cursor:
@@ -1016,21 +1023,29 @@ def update_view_date_range(conn, view_name, start_date, end_date):
         conn.commit()
 
 def check_date_range_overlap(existing_start, existing_end, requested_start, requested_end):
+    try:
+        existing_start = datetime.strptime(existing_start, "%Y-%m-%d")
+        existing_end = datetime.strptime(existing_end, "%Y-%m-%d")
+        requested_start = datetime.strptime(requested_start, "%Y-%m-%d")
+        requested_end = datetime.strptime(requested_end, "%Y-%m-%d")
+    except ValueError as e:
+        # Handle the case where date conversion fails
+        print(f"Error converting date: {e}")
+        return False  # Indicate failure due to date conversion error
+    
     # Check if there is an overlap between two date ranges
     return existing_start <= requested_end and existing_end >= requested_start
 
-def get_stock_technical_data_from_tables(stock_id, start_date=None, end_date=None):
+def get_stock_technical_data_from_tables(connection, stock_id, start_date=None, end_date=None):
     # Format start_date and end_date if they are provided
     formatted_start_date = start_date.strftime('%Y-%m-%d') if start_date else None
     formatted_end_date = end_date.strftime('%Y-%m-%d') if end_date else None
     
     print(f'{formatted_start_date} is start date and {formatted_end_date} is end date')
     data = []
-    connection = None
     cursor = None
 
     try:
-        connection = create_connection()
         cursor = connection.cursor()
 
         # Construct the query with optional date range conditions
@@ -1095,9 +1110,6 @@ def get_stock_technical_data_from_tables(stock_id, start_date=None, end_date=Non
     finally:
         if cursor is not None:
             cursor.close()
-
-        if connection is not None:
-            connection.close()
 
     return data
 
@@ -1189,8 +1201,7 @@ def create_or_refresh_materialized_view_with_partition():
         # Close the connection
         conn.close()
 
-def get_stock_technical_data_from_view(start_date, end_date):
-    conn = create_connection()
+def get_stock_technical_data_from_view(conn, stock_id, start_date, end_date):
     try:
         with conn.cursor() as cursor:
             # Select data from stock_technical_view based on the date range
@@ -1223,16 +1234,42 @@ def get_stock_technical_data_from_view(start_date, end_date):
                 FROM
                     stock_technical_view
                 WHERE
-                    "date" >= %s AND "date" <= %s
+                    "date" >= %s AND "date" <= %s and "stock_id" = %s
                 ORDER BY
                     "date" DESC;
             """
-            cursor.execute(select_data_sql, (start_date, end_date))
+            cursor.execute(select_data_sql, (start_date, end_date, stock_id))
             result = cursor.fetchall()
             return result
 
     except Exception as e:
         print(f"Error: {e}")
 
+def process_technical_analysis(stock_id, ticker_symbol, start_date, end_date):
+    conn = create_connection()
+    try:
+        # Calculate start and end dates for the view
+        view_start_date, view_end_date = get_view_date_range(conn, 'stock_technical_view')
+
+        # Check for date range overlap
+        if check_date_range_overlap(view_start_date, view_end_date, start_date, end_date):
+            # If there is an overlap, use get_stock_technical_data_from_view
+            technical_data = get_stock_technical_data_from_view(conn, stock_id, start_date, end_date)
+        else:
+            # If no overlap, use get_stock_technical_data_from_table
+            technical_data = get_stock_technical_data_from_tables(conn, stock_id, start_date, end_date)
+
+        # Process the technical data as needed
+        # For demonstration, let's just return the data
+        return {
+            'stock_id': stock_id,
+            'ticker_symbol': ticker_symbol,
+            'technical_analysis': technical_data
+        }
+
+    except Exception as e:
+        print(f"Error processing technical analysis: {e}")
+        return None  # Return None in case of an error
     finally:
+        # Close the connection
         conn.close()
