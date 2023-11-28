@@ -22,7 +22,7 @@ class PriceMovement:
 
     def to_dict(self):
         return {
-            'transaction_id': self.transaction_id,
+            'transaction_id': str(self.transaction_id),
             'date': self.date,
             'low': self.low,
             'open': self.open_price,

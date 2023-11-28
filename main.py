@@ -302,19 +302,21 @@ def get_technical_analysis():
             futures = []
 
             for entry in data["data"]:
-                stock_id = entry.get("stock_id")
                 ticker_symbol = entry.get("ticker_symbol")
+                country = entry.get("country")
 
-                if stock_id and ticker_symbol:
-                    task = (stock_id, ticker_symbol, start_date, end_date)
+                if country and ticker_symbol:
+                    task = (ticker_symbol, country, start_date, end_date)
                     futures.append(executor.submit(process_technical_analysis, *task))
 
             for future in concurrent.futures.as_completed(futures):
                 result = future.result()
-                if result:  # Check if result is not None
+                if result is not None:
                     technical_analysis_result.append(result)
-        for t in technical_analysis_result:
-            print(t['stock_id'] + t['ticker_symbol'])
+                else:
+                    # Handle the case where the result is None
+                    print("Result is None for one or more tasks.")
+        
         return jsonify({'results': technical_analysis_result})
 
     except (Exception, psycopg2.DatabaseError, ValueError) as error:

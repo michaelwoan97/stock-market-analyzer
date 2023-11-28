@@ -10,6 +10,8 @@ from psycopg2 import sql
 from finance import fetch_stock_data_from_url, PriceMovement
 from dotenv import load_dotenv
 
+from spark_processor import process_stock_data_with_spark
+
 # Load the environment variables from the .env file
 load_dotenv()
 
@@ -47,7 +49,7 @@ class StockData:
 
     def to_dict(self):
         return {
-            'stock_id': self.stock_id,
+            'stock_id': str(self.stock_id),
             'ticker_symbol': self.ticker_symbol,
             'country': self.country,
             'data': [price_movement.to_dict() for price_movement in self.data]
@@ -120,7 +122,7 @@ def stock_data_exists(connection, stock_id, ticker_symbol):
         WHERE "stock_id" = %s AND "ticker_symbol" = %s
     );
     """
-    cursor.execute(query, (str(stock_id[0]), ticker_symbol))
+    cursor.execute(query, (stock_id, ticker_symbol))
     exists = cursor.fetchone()[0]
     cursor.close()
     return exists
@@ -149,16 +151,32 @@ def fetch_stock_data_history_from_db(connection, stock_id, ticker_symbol):
 def insert_stock_data_into_db(connection, stock_data):
     cursor = connection.cursor()
     try:
+        total_rowcount = 0  # Initialize a variable to track the total rowcount
+
         for data_point in stock_data.data:
             query = """
-                    INSERT INTO "Stocks" ("transaction_id", "stock_id", "ticker_symbol", "date", "low", "open", "high", "volume", "close")
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
-                """
-            cursor.execute(query, (data_point.transaction_id, str(stock_data.stock_id[0]), stock_data.ticker_symbol, data_point.date, data_point.low, data_point.open_price, data_point.high, data_point.volume, data_point.close))
-        connection.commit()
+                INSERT INTO "Stocks" ("transaction_id", "stock_id", "ticker_symbol", "date", "low", "open", "high", "volume", "close")
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
+            """
+            cursor.execute(query, (data_point.transaction_id, stock_data.stock_id, stock_data.ticker_symbol, data_point.date, data_point.low, data_point.open_price, data_point.high, data_point.volume, data_point.close))
+            
+            # Add the rowcount of the current execute to the total rowcount
+            total_rowcount += cursor.rowcount
+        
+        # Check if any rows were affected
+        if total_rowcount > 0:
+            print(f"Total rows inserted: {total_rowcount}")
+            connection.commit()
+        else:
+            print("No rows were affected. Possible duplicate or failed insert.")
+            connection.rollback()
+
+        return total_rowcount  # Return the total rowcount
+
     except Exception as e:
         connection.rollback()
         print(f"Error inserting stock data into the database: {e}")
+        return 0  # Return 0 in case of an error
     finally:
         cursor.close()
         
@@ -1102,7 +1120,9 @@ def get_stock_technical_data_from_tables(connection, stock_id, start_date=None, 
         else:
             cursor.execute(query, (stock_id,))
 
-        data = cursor.fetchall()
+        # Fetch all rows as a list of dictionaries
+        columns = [desc[0] for desc in cursor.description]
+        data = [dict(zip(columns, row)) for row in cursor.fetchall()]
     except Exception as e:
         print(f"Error fetching technical data: {e}")
         data = []  # Set data to an empty list in case of an error
@@ -1207,8 +1227,6 @@ def get_stock_technical_data_from_view(conn, stock_id, start_date, end_date):
             # Select data from stock_technical_view based on the date range
             select_data_sql = """
                 SELECT
-                    "stock_id",
-                    "ticker_symbol",
                     "date",
                     "close",
                     "ma_5_days_sma",
@@ -1239,25 +1257,88 @@ def get_stock_technical_data_from_view(conn, stock_id, start_date, end_date):
                     "date" DESC;
             """
             cursor.execute(select_data_sql, (start_date, end_date, stock_id))
-            result = cursor.fetchall()
+
+            # Fetch all rows as a list of dictionaries
+            columns = [desc[0] for desc in cursor.description]
+            result = [dict(zip(columns, row)) for row in cursor.fetchall()]
+
             return result
 
     except Exception as e:
         print(f"Error: {e}")
 
-def process_technical_analysis(stock_id, ticker_symbol, start_date, end_date):
-    conn = create_connection()
+def check_stock_exists_in_view(connection, stock_id, ticker_symbol):
+    cursor = connection.cursor()
+    
     try:
-        # Calculate start and end dates for the view
-        view_start_date, view_end_date = get_view_date_range(conn, 'stock_technical_view')
+        # SQL query to check if the stock exists in the materialized view
+        query = """
+            SELECT 1 
+            FROM stock_technical_view 
+            WHERE stock_id = %s AND ticker_symbol = %s
+            LIMIT 1;
+        """
+        cursor.execute(query, (stock_id, ticker_symbol))
+        
+        stock_exists = cursor.fetchone()
 
-        # Check for date range overlap
-        if check_date_range_overlap(view_start_date, view_end_date, start_date, end_date):
-            # If there is an overlap, use get_stock_technical_data_from_view
-            technical_data = get_stock_technical_data_from_view(conn, stock_id, start_date, end_date)
+        return stock_exists is not None
+
+    except Exception as e:
+        print(f"Error checking if stock exists in the view: {e}")
+        return False  # Return False in case of an error
+
+    finally:
+        cursor.close()
+
+def process_technical_analysis(ticker_symbol, country, start_date, end_date):
+    conn = create_connection()
+
+    try:
+        # Check if the company exists in the database and get its stock_id
+        stock_ids = check_company_exists(conn, ticker_symbol, country)
+
+        if not stock_ids:
+            print(f"Company with ticker symbol {ticker_symbol} in country {country} does not exist.")
+            return None  # Return None if the company does not exist
+
+        # Assuming the check_company_exists returns a list, take the first stock_id
+        stock_id = stock_ids[0]
+
+        # Check if stock data exists in the Stocks table
+        if not stock_data_exists(conn, stock_id, ticker_symbol):
+            print(f"No stock data found for {ticker_symbol} with stock_id {stock_id} in the database. Need to fetch data.")
+            query_url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker_symbol}?symbol={ticker_symbol}&period1=0&period2=9999999999&interval=1d&includePrePost=true&events=div%2Csplit"
+
+            # Fetch stock data using the query_url and store it in a StockData object
+            arr_stock_data_history = fetch_stock_data_from_url(query_url)
+            stock_data = StockData(stock_id, ticker_symbol, country, data=arr_stock_data_history)
+            
+            process_stock_data_with_spark(stock_data)
+
+            technical_data = stock_data.data
+            # Insert the fetched stock data into the database
+            # insert_stock_data_into_db(conn, stock_data)
+
+            # print(f"Stock data for {ticker_symbol} with stock_id {stock_id} fetched from Yahoo Finance and inserted into the database.")
         else:
-            # If no overlap, use get_stock_technical_data_from_table
-            technical_data = get_stock_technical_data_from_tables(conn, stock_id, start_date, end_date)
+            # Check if the stock exists in the materialized view
+            stock_exists_in_view = check_stock_exists_in_view(conn, stock_id, ticker_symbol)
+
+            if stock_exists_in_view:
+                # Calculate start and end dates for the view
+                view_start_date, view_end_date = get_view_date_range(conn, 'stock_technical_view')
+
+                # Check for date range overlap
+                if check_date_range_overlap(view_start_date, view_end_date, start_date, end_date):
+                    # If there is an overlap, use get_stock_technical_data_from_view
+                    technical_data = get_stock_technical_data_from_view(conn, stock_id, start_date, end_date)
+                else:
+                    # If no overlap, use get_stock_technical_data_from_tables
+                    technical_data = get_stock_technical_data_from_tables(conn, stock_id, start_date, end_date)
+            else:
+                # If stock does not exist in view, use get_stock_technical_data_from_tables
+                technical_data = get_stock_technical_data_from_tables(conn, stock_id, start_date, end_date)
 
         # Process the technical data as needed
         # For demonstration, let's just return the data
