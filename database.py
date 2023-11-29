@@ -110,22 +110,46 @@ def check_company_exists(connection, ticker_symbol, country):
     cursor.close()
     return stock_ids
 
-# Function to check if stock data exists in the database
-def stock_data_exists(connection, stock_id, ticker_symbol):
-    
+def stock_data_exists(connection, stock_id, ticker_symbol, start_date=None, end_date=None):
     cursor = connection.cursor()
-    # Check if stock data exists in the Stocks table for the given stock_id and ticker_symbol
+
+    # Select specific columns for the given stock_id, ticker_symbol, and date range
     query = """
-    SELECT EXISTS(
-        SELECT 1
-        FROM "Stocks"
-        WHERE "stock_id" = %s AND "ticker_symbol" = %s
-    );
+    SELECT
+        "transaction_id",
+        "stock_id",
+        "ticker_symbol",
+        "date",
+        "close",
+        "volume"
+    FROM "Stocks"
+    WHERE "stock_id" = %s AND "ticker_symbol" = %s
     """
-    cursor.execute(query, (stock_id, ticker_symbol))
-    exists = cursor.fetchone()[0]
+    
+    # Add optional date range conditions
+    if start_date is not None:
+        query += 'AND "date" >= %s '
+    if end_date is not None:
+        query += 'AND "date" <= %s '
+
+    # Execute the query with parameters
+    if start_date is not None and end_date is not None:
+        cursor.execute(query, (stock_id, ticker_symbol, start_date, end_date))
+    else:
+        cursor.execute(query, (stock_id, ticker_symbol))
+
+    # Get column headers
+    column_headers = [desc[0] for desc in cursor.description]
+
+    # Fetch the data
+    data = cursor.fetchall()
+
+    # Convert the result set to a list of dictionaries
+    result_list = [dict(zip(column_headers, row)) for row in data]
+
     cursor.close()
-    return exists
+
+    return result_list
 
 # Function to fetch stock data from the database
 def fetch_stock_data_history_from_db(connection, stock_id, ticker_symbol):
@@ -1059,7 +1083,6 @@ def get_stock_technical_data_from_tables(connection, stock_id, start_date=None, 
     formatted_start_date = start_date.strftime('%Y-%m-%d') if start_date else None
     formatted_end_date = end_date.strftime('%Y-%m-%d') if end_date else None
     
-    print(f'{formatted_start_date} is start date and {formatted_end_date} is end date')
     data = []
     cursor = None
 
@@ -1354,3 +1377,85 @@ def process_technical_analysis(ticker_symbol, country, start_date, end_date):
     finally:
         # Close the connection
         conn.close()
+
+def process_stock_data(ticker_symbol, country, start_date, end_date, technical_requested):
+    try:
+        result = None
+        # Get a database connection
+        connection = create_connection()
+        cursor = connection.cursor()
+
+        # Check if the company exists and get the stock_ids
+        stock_ids = check_company_exists(connection, ticker_symbol, country)
+
+        if stock_ids:
+            # Use the first stock_id retrieved
+            stock_id = stock_ids[0]
+
+            # Use stock_data_exists function to check if data exists in table for the given stock_id, ticker_symbol, and date range
+            data_exists = stock_data_exists(connection, stock_id, ticker_symbol, start_date, end_date)
+
+            if data_exists:
+                # Data exists
+                if not technical_requested:
+                    # If technical_requested is False, return the stock data
+                    result = data_exists
+
+                    # Convert the list of dictionaries to a DataFrame
+                    df = pd.DataFrame(result)
+
+                    # Print the DataFrame
+                    print(df)
+                else:
+                    # Try to get technical data from a view
+                    technical_data_from_view = get_stock_technical_data_from_view(connection, stock_id, start_date, end_date)
+
+                    if technical_data_from_view:
+                        # If data is found in the view, use it
+                        result = technical_data_from_view
+
+                        # Convert the list of dictionaries to a DataFrame
+                        df = pd.DataFrame(result)
+
+                        # Print the DataFrame
+                        print(df)
+                    else:
+                        # If data is not found in the view, try to get it from tables
+                        technical_data_from_tables = get_stock_technical_data_from_tables(connection, stock_id, start_date, end_date)
+
+                        if technical_data_from_tables:
+                            # If data is found in tables, use it
+                            result = technical_data_from_tables
+                        else:
+                            # If no data is found in both view and tables, print a message
+                            print("Will implement data processing function!!!!!!!")
+                            # result = perform_data_processing(ticker_symbol, country, start_date, end_date, stock_id)
+            else:
+                # Stock data does not exist in the database
+                print(f"No stock data found for {ticker_symbol} with stock_id {stock_id} in the database. Need to fetch data.")
+                query_url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker_symbol}?symbol={ticker_symbol}&period1=0&period2=9999999999&interval=1d&includePrePost=true&events=div%2Csplit"
+
+                # Fetch stock data using the query_url and store it in a StockData object
+                arr_stock_data_history = fetch_stock_data_from_url(query_url)
+                stock_data = StockData(stock_id, ticker_symbol, country, data=arr_stock_data_history)
+                
+                # Process stock data with Spark
+                process_stock_data_with_spark(stock_data)
+
+                # Retrieve technical data from the stock_data object
+                technical_data = stock_data.data
+                result = technical_data
+        else:
+            # Company does not exist, you may want to handle this case accordingly
+            print("Company does not exist. Handle this case accordingly.")
+            result = None
+
+        # Close the database connection
+        cursor.close()
+        connection.close()
+        return result
+
+    except (Exception, psycopg2.DatabaseError) as error:
+        # Handle database errors
+        print(f"Database error: {error}")
+        return None

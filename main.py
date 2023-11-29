@@ -281,43 +281,33 @@ def update_watchlist_stocks(data, watchlist_id):
 
 
 #====================================================================================================
-@app.route('/get_technical_analysis', methods=['POST'])
-def get_technical_analysis():
+@app.route('/get_stock_data', methods=['POST'])
+def get_stock_data():
     try:
         data = request.get_json()
 
-        if not isinstance(data, dict) or "data" not in data:
-            raise ValueError("Invalid request data format.")
+        if not isinstance(data, dict) or "data" not in data or "technical" not in data:
+            raise ValueError("Invalid request data format. 'data' and 'technical' fields are required.")
 
         start_date = data.get("start_date")
         end_date = data.get("end_date")
+        technical_requested = data.get("technical", False)
 
         # Handle errors for start_date and end_date extraction
         if start_date is None or end_date is None:
             raise ValueError("Both start_date and end_date are required.")
 
-        technical_analysis_result = []
+        stock_data_result = []
 
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            futures = []
+        for entry in data["data"]:
+            ticker_symbol = entry.get("ticker_symbol")
+            country = entry.get("country")
 
-            for entry in data["data"]:
-                ticker_symbol = entry.get("ticker_symbol")
-                country = entry.get("country")
+            if country and ticker_symbol:
+                result = process_stock_data(ticker_symbol, country, start_date, end_date, technical_requested)
+                stock_data_result.append(result)
 
-                if country and ticker_symbol:
-                    task = (ticker_symbol, country, start_date, end_date)
-                    futures.append(executor.submit(process_technical_analysis, *task))
-
-            for future in concurrent.futures.as_completed(futures):
-                result = future.result()
-                if result is not None:
-                    technical_analysis_result.append(result)
-                else:
-                    # Handle the case where the result is None
-                    print("Result is None for one or more tasks.")
-        
-        return jsonify({'results': technical_analysis_result})
+        return jsonify({'results': stock_data_result})
 
     except (Exception, psycopg2.DatabaseError, ValueError) as error:
         return jsonify({'error': str(error)}), 500
