@@ -10,11 +10,11 @@ class PriceMovement:
     def __init__(self, transaction_id, date, low, open_price, high, volume, close):
         self.transaction_id = transaction_id
         self.date = date
-        self.low = low
-        self.open_price = open_price
-        self.high = high
+        self.low = round(low, 2)
+        self.open_price = round(open_price, 2)
+        self.high = round(high, 2)
         self.volume = volume
-        self.close = close
+        self.close = round(close, 2)
 
     def __str__(self):
         return f"PriceMovement(transaction_id={self.transaction_id}, date={self.date}, low={self.low}, " \

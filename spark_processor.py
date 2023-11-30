@@ -1,11 +1,8 @@
-from pyspark.sql import SparkSession
 from pyspark.sql.types import StructType, StructField, StringType
 from pyspark.sql.functions import col, lit
 import uuid
 
-def process_stock_data_with_spark(stock_data):
-    # Initialize a Spark session
-    spark = SparkSession.builder.appName("StockDataProcessor").getOrCreate()
+def process_stock_data_with_spark(spark, stock_data):
 
     try:
         # Convert PriceMovement objects to dictionaries

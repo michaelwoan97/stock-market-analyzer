@@ -6,9 +6,10 @@ import os
 from functools import wraps
 from datetime import datetime, timedelta  # Import datetime and timedelta from the datetime module
 from flask import Flask, request, jsonify
-from database import StockData, delete_watchlist, fetch_boillinger_bands_data_from_db, fetch_moving_averages_data_from_db, fetch_relative_indexes_data_from_db, filter_stock_data_by_date_range, find_watchlist_by_id, process_stock, create_user, find_user_by_username, find_user_by_id, find_watchlist, create_watchlist, add_stock_to_watchlist, get_watchlist, process_technical_analysis, update_watchlist_info, update_watchlist_stocks_info
+from database import StockData, delete_watchlist, fetch_boillinger_bands_data_from_db, fetch_moving_averages_data_from_db, fetch_relative_indexes_data_from_db, filter_stock_data_by_date_range, find_watchlist_by_id, process_stock, create_user, find_user_by_username, find_user_by_id, find_watchlist, create_watchlist, add_stock_to_watchlist, get_watchlist, process_stock_data, process_technical_analysis, update_watchlist_info, update_watchlist_stocks_info
 from passlib.hash import bcrypt
 from dotenv import load_dotenv
+from pyspark.sql import SparkSession
 
 # Load the environment variables from the .env file
 load_dotenv()
@@ -18,6 +19,11 @@ app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY')
 
 # Enable debug mode
 app.debug = True
+
+# Initialize a Spark session
+spark = SparkSession.builder.appName("StockDataProcessor").getOrCreate()
+
+
 
 def fetch_technical_analysis(stock_id, ticker_symbol):
     moving_averages_data = fetch_moving_averages_data_from_db(stock_id, ticker_symbol)
@@ -304,7 +310,7 @@ def get_stock_data():
             country = entry.get("country")
 
             if country and ticker_symbol:
-                result = process_stock_data(ticker_symbol, country, start_date, end_date, technical_requested)
+                result = process_stock_data(spark, ticker_symbol, country, start_date, end_date, technical_requested)
                 stock_data_result.append(result)
 
         return jsonify({'results': stock_data_result})

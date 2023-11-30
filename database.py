@@ -1378,7 +1378,7 @@ def process_technical_analysis(ticker_symbol, country, start_date, end_date):
         # Close the connection
         conn.close()
 
-def process_stock_data(ticker_symbol, country, start_date, end_date, technical_requested):
+def process_stock_data(spark, ticker_symbol, country, start_date, end_date, technical_requested):
     try:
         result = None
         # Get a database connection
@@ -1427,6 +1427,7 @@ def process_stock_data(ticker_symbol, country, start_date, end_date, technical_r
                             # If data is found in tables, use it
                             result = technical_data_from_tables
                         else:
+                            # drop that stock in tables and recalcualte everything again for that stock only
                             # If no data is found in both view and tables, print a message
                             print("Will implement data processing function!!!!!!!")
                             # result = perform_data_processing(ticker_symbol, country, start_date, end_date, stock_id)
@@ -1439,12 +1440,35 @@ def process_stock_data(ticker_symbol, country, start_date, end_date, technical_r
                 arr_stock_data_history = fetch_stock_data_from_url(query_url)
                 stock_data = StockData(stock_id, ticker_symbol, country, data=arr_stock_data_history)
                 
-                # Process stock data with Spark
-                process_stock_data_with_spark(stock_data)
+                if not technical_requested:
+                    # If technical_requested is False, return the fetched stock data
+                    filter_data = [entry for entry in stock_data.data if start_date <= entry.date <= end_date]
+                    stock_data.data = filter_data
+                    result = stock_data.to_dict()
 
-                # Retrieve technical data from the stock_data object
-                technical_data = stock_data.data
-                result = technical_data
+                    # Convert the list of dictionaries to a DataFrame
+                    # test = [entry.to_dict() for entry in filter_data]
+                    # df = pd.DataFrame(test)
+
+                    # # Add literal columns
+                    # df['stock_id'] = stock_id
+                    # df['ticker_symbol'] = ticker_symbol
+                    # df['country'] = country
+
+                    # # Reorder columns to have literal columns first
+                    # column_order = ['stock_id', 'ticker_symbol', 'country'] + [col for col in df.columns if col not in ['stock_id', 'ticker_symbol', 'country']]
+                    # df = df[column_order]
+
+                    # # Print the DataFrame
+                    # print(df.to_string(max_colwidth=1000))
+
+                else:
+                    # Process stock data with Spark
+                    process_stock_data_with_spark(spark, stock_data)
+
+                    # Retrieve technical data from the stock_data object
+                    technical_data = stock_data.data
+                    result = technical_data
         else:
             # Company does not exist, you may want to handle this case accordingly
             print("Company does not exist. Handle this case accordingly.")
