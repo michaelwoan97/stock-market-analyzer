@@ -1,8 +1,10 @@
 import asyncio
+import asyncpg
 from datetime import datetime, timedelta
 import json
 import os
 import uuid
+import copy
 from altair import Data
 from matplotlib import ticker
 import pandas as pd
@@ -13,18 +15,26 @@ from finance import fetch_stock_data_from_url, PriceMovement
 from dotenv import load_dotenv
 
 from spark_processor import process_stock_data_with_spark
+from asyncpg.pool import create_pool 
 
 # Load the environment variables from the .env file
 load_dotenv()
 
-# Connection parameters for the PostgreSQL server
+
+# ---- Non-Async Operations ----
+# ============================================================================
+# ============================================================================
+
+
+#Connection parameters for the PostgreSQL server
 db_params = {
     'user': os.environ.get('DB_USER'),
     'password': os.environ.get('DB_PASSWORD'),
     'host': os.environ.get('DB_HOST'),
     'port': os.environ.get('DB_PORT'),
-    'database': os.environ.get('DB_NAME'),
+    'database': os.environ.get('DB_NAME')
 }
+
 
 # ========== StockData ==========
     
@@ -56,7 +66,6 @@ class StockData:
             'country': self.country,
             'data': [price_movement.to_dict() for price_movement in self.data]
         }
-
 
 # Function to create a database connection with error handling
 def create_connection():
@@ -100,58 +109,6 @@ def get_stocks_ticker_id_exist():
         print(f"Error geting stock ticker & its id from the database: {e}")
     finally:
         cursor.close()
-
-# Function to check if a company exists in the database
-def check_company_exists(connection, ticker_symbol, country):
-    cursor = connection.cursor()
-    # SQL query to check for the existence of a company and get stock_id based on ticker symbol and country
-    query = "SELECT \"stock_id\" FROM \"CompanyInformation\" WHERE \"ticker_symbol\" = %s AND \"country\" = %s;"
-    cursor.execute(query, (ticker_symbol, country))
-    
-    stock_ids = [row[0] for row in cursor.fetchall()]
-    cursor.close()
-    return stock_ids
-
-def stock_data_exists(connection, stock_id, ticker_symbol, start_date=None, end_date=None):
-    cursor = connection.cursor()
-
-    # Select specific columns for the given stock_id, ticker_symbol, and date range
-    query = """
-    SELECT
-        "transaction_id",
-        "stock_id",
-        "ticker_symbol",
-        "date",
-        "close",
-        "volume"
-    FROM "Stocks"
-    WHERE "stock_id" = %s AND "ticker_symbol" = %s
-    """
-    
-    # Add optional date range conditions
-    if start_date is not None:
-        query += 'AND "date" >= %s '
-    if end_date is not None:
-        query += 'AND "date" <= %s '
-
-    # Execute the query with parameters
-    if start_date is not None and end_date is not None:
-        cursor.execute(query, (stock_id, ticker_symbol, start_date, end_date))
-    else:
-        cursor.execute(query, (stock_id, ticker_symbol))
-
-    # Get column headers
-    column_headers = [desc[0] for desc in cursor.description]
-
-    # Fetch the data
-    data = cursor.fetchall()
-
-    # Convert the result set to a list of dictionaries
-    result_list = [dict(zip(column_headers, row)) for row in data]
-
-    cursor.close()
-
-    return result_list
 
 # Function to fetch stock data from the database
 def fetch_stock_data_history_from_db(connection, stock_id, ticker_symbol):
@@ -507,7 +464,6 @@ def find_user_by_id(user_id):
         return None
 
 
-
 # ========== Watchlist ==========
 # This section contains functions and classes related to watchlists.
  
@@ -838,8 +794,6 @@ def update_watchlist_stocks_info(watchlist_id, updated_stocks):
         print("Error while updating watchlist stocks:", error)
         raise error
 
-# ============================================================================
-
 def get_transaction_ids_and_dates(stock_id, ticker_symbol):
     connection = create_connection()
     cursor = connection.cursor()
@@ -1005,38 +959,130 @@ def fetch_relative_indexes_data_from_db(stock_id, ticker_symbol):
     return data
 
 
-def get_date_range_for_view(view_name):
-    conn = create_connection()
+# ---- Async Operations ----
+# ============================================================================
+# ============================================================================
+# Connection parameters for the PostgreSQL server
+async_db_params = {
+    'user': os.environ.get('DB_USER'),
+    'password': os.environ.get('DB_PASSWORD'),
+    'host': os.environ.get('DB_HOST'),
+    'port': os.environ.get('DB_PORT'),
+    'database': os.environ.get('DB_NAME'),
+    'min_size': 5,  # Minimum number of connections in the pool (adjust as needed)
+    'max_size': 10,  # Maximum number of connections in the pool (adjust as needed)
+    'max_queries': 500,  # Maximum number of queries a connection can execute before being released (adjust as needed)
+}
+
+# Function to create a database connection pool
+async def async_create_connection_pool():
     try:
-        with conn.cursor() as cursor:
-            cursor.execute("SELECT start_date, end_date FROM view_date_ranges WHERE view_name = %s;", (view_name,))
-            result = cursor.fetchone()
-            return result  # This will be (start_date, end_date) or None if the view_name is not found
-    finally:
-        conn.close()
+        pool = await create_pool(**async_db_params)
+        return pool
+    except asyncpg.PostgresError as e:
+        print(f"Error creating connection pool: {e}")
+        # Handle the error or re-raise it
+        raise e
 
-def get_view_date_range(conn, view_name):
-    with conn.cursor() as cursor:
-        # Retrieve the date range for the given view
-        cursor.execute(
-            "SELECT start_date, end_date FROM public.views_date_ranges WHERE view_name = %s",
-            (view_name,)
-        )
-        date_range = cursor.fetchone()
+# Function to create a database connection
+async def async_create_connection():
+    pool = await async_create_connection_pool()
+    if pool:
+        connection = await pool.acquire()
+        return pool, connection
+    else:
+        raise RuntimeError("Connection pool is not available.")
 
-        if date_range:
-            start_date, end_date = date_range
-            formatted_start_date = start_date.strftime("%Y-%m-%d") if start_date else None
-            formatted_end_date = end_date.strftime("%Y-%m-%d") if end_date else None
-            return formatted_start_date, formatted_end_date
+# Function to check if a company exists in the database
+async def async_check_company_exists(connection, ticker_symbol, country):
+    try:
+        # SQL query to check for the existence of a company and get stock_id based on ticker symbol and country
+        query = "SELECT \"stock_id\" FROM \"CompanyInformation\" WHERE \"ticker_symbol\" = $1 AND \"country\" = $2;"
+        result = await connection.fetch(query, ticker_symbol, country)
+
+        stock_ids = [row['stock_id'] for row in result]
+        return stock_ids
+    except asyncpg.PostgresError as e:
+        print(f"Error checking company existence: {e}")
+        # Handle the error or re-raise it
+        raise e
+
+async def async_stock_data_exists(connection, stock_id, ticker_symbol, start_date=None, end_date=None):
+    try:
+        # Select specific columns for the given stock_id, ticker_symbol, and date range
+        query = """
+        SELECT
+            "transaction_id",
+            "stock_id",
+            "ticker_symbol",
+            "date",
+            "close",
+            "volume"
+        FROM "Stocks"
+        WHERE "stock_id" = $1 AND "ticker_symbol" = $2
+        """
+
+        # Convert optional date range conditions to date objects
+        if start_date is not None:
+            start_date = datetime.strptime(start_date, "%Y-%m-%d").date()
+            query += 'AND "date" >= $3 '
+        if end_date is not None:
+            end_date = datetime.strptime(end_date, "%Y-%m-%d").date()
+            query += 'AND "date" <= $4 '
+
+        # Execute the query with parameters
+        if start_date is not None and end_date is not None:
+            result = await connection.fetch(query, stock_id, ticker_symbol, start_date, end_date)
         else:
-            return None, None
+            result = await connection.fetch(query, stock_id, ticker_symbol)
 
-def create_view_date_range_table(conn):
-    with conn.cursor() as cursor:
+        # Convert the result set to a list of dictionaries
+        result_list = [dict(row) for row in result]
+
+        return result_list
+    except asyncpg.PostgresError as e:
+        print(f"Error checking stock data existence: {e}")
+        # Handle the error or re-raise it
+        raise e
+
+
+async def get_date_range_for_view(view_name, connection):
+    try:
+        async with connection.transaction():
+            async with connection.cursor() as cursor:
+                await cursor.execute("SELECT start_date, end_date FROM view_date_ranges WHERE view_name = %s;", (view_name,))
+                result = await cursor.fetchone()
+                return result  # This will be (start_date, end_date) or None if the view_name is not found
+    except asyncpg.exceptions.PostgresError as e:
+        print(f"Error fetching date range for view {view_name}: {e}")
+        return None
+
+async def get_view_date_range(conn, view_name):
+    try:
+        async with conn.transaction():
+            async with conn.cursor() as cursor:
+                # Retrieve the date range for the given view
+                await cursor.execute(
+                    "SELECT start_date, end_date FROM public.views_date_ranges WHERE view_name = %s",
+                    (view_name,)
+                )
+                date_range = await cursor.fetchone()
+
+                if date_range:
+                    start_date, end_date = date_range
+                    formatted_start_date = start_date.strftime("%Y-%m-%d") if start_date else None
+                    formatted_end_date = end_date.strftime("%Y-%m-%d") if end_date else None
+                    return formatted_start_date, formatted_end_date
+                else:
+                    return None, None
+    except asyncpg.exceptions.PostgresError as e:
+        print(f"Error fetching date range for view {view_name}: {e}")
+        return None, None
+
+async def async_create_view_date_range_table(conn):
+    try:
         # Check if the table exists
-        cursor.execute("SELECT to_regclass('public.views_date_ranges')")
-        table_exists = cursor.fetchone()[0]
+        table_exists = await conn.fetchval("SELECT to_regclass('public.views_date_ranges')")
 
         if not table_exists:
             # If it doesn't exist, create the table
@@ -1047,24 +1093,24 @@ def create_view_date_range_table(conn):
                     end_date DATE
                 );
             """
-            cursor.execute(create_table_sql)
+            await conn.execute(create_table_sql)
 
-            # Commit the changes
-            conn.commit()
+    except Exception as e:
+        print(f"Error creating views_date_ranges table: {e}")
 
-def update_view_date_range(conn, view_name, start_date, end_date):
-    with conn.cursor() as cursor:
+async def async_update_view_date_range(conn, view_name, start_date, end_date):
+    try:
         # Update or insert the date range for the given view
         upsert_sql = """
             INSERT INTO public.views_date_ranges (view_name, start_date, end_date)
-            VALUES (%s, %s, %s)
+            VALUES ($1, $2, $3)
             ON CONFLICT (view_name) DO UPDATE
             SET start_date = EXCLUDED.start_date, end_date = EXCLUDED.end_date;
         """
-        cursor.execute(upsert_sql, (view_name, start_date, end_date))
+        await conn.execute(upsert_sql, view_name, start_date, end_date)
 
-        # Commit the changes
-        conn.commit()
+    except Exception as e:
+        print(f"Error updating views_date_ranges table: {e}")
 
 def check_date_range_overlap(existing_start, existing_end, requested_start, requested_end):
     try:
@@ -1080,16 +1126,13 @@ def check_date_range_overlap(existing_start, existing_end, requested_start, requ
     # Check if there is an overlap between two date ranges
     return existing_start <= requested_end and existing_end >= requested_start
 
-def get_stock_technical_data_from_tables(connection, stock_id, start_date=None, end_date=None):
-    # Format start_date and end_date if they are provided
-    formatted_start_date = start_date.strftime('%Y-%m-%d') if start_date else None
-    formatted_end_date = end_date.strftime('%Y-%m-%d') if end_date else None
-    
-    data = []
-    cursor = None
-
+async def async_get_stock_technical_data_from_tables(connection, stock_id, start_date=None, end_date=None):
     try:
-        cursor = connection.cursor()
+        # Format start_date and end_date if they are provided
+        formatted_start_date = datetime.strptime(start_date, "%Y-%m-%d").date() if start_date else None
+        formatted_end_date = datetime.strptime(end_date, "%Y-%m-%d").date() if end_date else None
+
+        data = []
 
         # Construct the query with optional date range conditions
         query = """
@@ -1126,82 +1169,76 @@ def get_stock_technical_data_from_tables(connection, stock_id, start_date=None, 
                 "BoillingerBands" BB ON S."stock_id" = BB."stock_id" AND S."date" = BB."date"
             INNER JOIN
                 "RelativeIndexes" RI ON S."stock_id" = RI."stock_id" AND S."date" = RI."date"
-            """
+        """
 
         # Add optional date range conditions
         if start_date is not None:
-            query += f'WHERE S."date" >= %s '
+            query += 'WHERE S."date" >= $1 '
         if end_date is not None:
-            query += f'AND S."date" <= %s '
+            query += 'AND S."date" <= $2 '
 
         # Add condition to filter by stock_id
-        query += 'AND S."stock_id" = %s '
+        query += 'AND S."stock_id" = $3 '
 
         query += 'ORDER BY S."date" ASC LIMIT 10;'
-        
+
         # Execute the query with parameters
         if start_date is not None and end_date is not None:
-            cursor.execute(query, (formatted_start_date, formatted_end_date, stock_id))
+            result = await connection.fetch(query, formatted_start_date, formatted_end_date, stock_id)
         else:
-            cursor.execute(query, (stock_id,))
+            result = await connection.fetch(query, stock_id)
 
         # Fetch all rows as a list of dictionaries
-        columns = [desc[0] for desc in cursor.description]
-        data = [dict(zip(columns, row)) for row in cursor.fetchall()]
+        columns = [desc[0] for desc in result.description]
+        data = [dict(row) for row in result]
+
+        return data
+
     except Exception as e:
         print(f"Error fetching technical data: {e}")
-        data = []  # Set data to an empty list in case of an error
+        return None
 
-    finally:
-        if cursor is not None:
-            cursor.close()
-
-    return data
-
-def create_or_refresh_materialized_view_with_partition():
-    conn = create_connection()
+async def async_create_or_refresh_materialized_view_with_partition(conn):
     try:
         # Calculate start and end dates dynamically (e.g., 10 years from now)
         current_date = datetime.now()
         start_date = current_date - timedelta(days=365 * 10)
         end_date = current_date
-
+    
         # Open a cursor to perform database operations
-        with conn.cursor() as cursor:
+        async with conn.transaction():
             # Create the views_date_ranges table if it doesn't exist
-            create_view_date_range_table(conn)
+            await async_create_view_date_range_table(conn)
 
             # Check if the materialized view exists
-            cursor.execute(
+            view_exists = await conn.fetchval(
                 "SELECT 1 FROM pg_matviews WHERE matviewname = 'stock_technical_view'"
             )
-            view_exists = cursor.fetchone()
 
             if not view_exists:
-                # If it doesn't exist, create the materialized view
                 create_view_sql = """
                     CREATE MATERIALIZED VIEW stock_technical_view AS
                     SELECT
-                        S."stock_id",
-                        S."ticker_symbol",
-                        S."date",
-                        S."close",
-                        MA."5_days_sma" AS "ma_5_days_sma",
-                        MA."20_days_sma" AS "ma_20_days_sma",
-                        MA."50_days_sma" AS "ma_50_days_sma",
-                        MA."200_days_sma" AS "ma_200_days_sma",
-                        MA."5_days_ema" AS "ma_5_days_ema",
-                        MA."20_days_ema" AS "ma_20_days_ema",
-                        MA."50_days_ema" AS "ma_50_days_ema",
-                        MA."200_days_ema" AS "ma_200_days_ema",
-                        BB."5_upper_band" AS "bb_5_upper_band",
-                        BB."5_lower_band" AS "bb_5_lower_band",
-                        BB."20_upper_band" AS "bb_20_upper_band",
-                        BB."20_lower_band" AS "bb_20_lower_band",
-                        BB."50_upper_band" AS "bb_50_upper_band",
-                        BB."50_lower_band" AS "bb_50_lower_band",
-                        BB."200_upper_band" AS "bb_200_upper_band",
-                        BB."200_lower_band" AS "bb_200_lower_band",
+                        S.stock_id,
+                        S.ticker_symbol,
+                        S.date,
+                        S.close,
+                        MA."5_days_sma" AS ma_5_days_sma,
+                        MA."20_days_sma" AS ma_20_days_sma,
+                        MA."50_days_sma" AS ma_50_days_sma,
+                        MA."200_days_sma" AS ma_200_days_sma,
+                        MA."5_days_ema" AS ma_5_days_ema,
+                        MA."20_days_ema" AS ma_20_days_ema,
+                        MA."50_days_ema" AS ma_50_days_ema,  
+                        MA."200_days_ema" AS ma_200_days_ema,
+                        BB."5_upper_band" AS bb_5_upper_band,
+                        BB."5_lower_band" AS bb_5_lower_band,
+                        BB."20_upper_band" AS bb_20_upper_band,
+                        BB."20_lower_band" AS bb_20_lower_band,
+                        BB."50_upper_band" AS bb_50_upper_band,
+                        BB."50_lower_band" AS bb_50_lower_band,
+                        BB."200_upper_band" AS bb_200_upper_band,
+                        BB."200_lower_band" AS bb_200_lower_band,
                         RI."14_days_rsi",
                         RI."20_days_rsi",
                         RI."50_days_rsi",
@@ -1215,345 +1252,262 @@ def create_or_refresh_materialized_view_with_partition():
                     INNER JOIN
                         "RelativeIndexes" RI ON S.stock_id = RI.stock_id::uuid AND S.date = RI.date
                     WHERE
-                        S.date >= %s AND S.date <= %s
+                        S.date >= '{}' AND S.date <= '{}'
                     ORDER BY
                         S.date DESC;
-                """
-                cursor.execute(create_view_sql, (start_date, end_date))
+                """.format(start_date, end_date)
+
+                await conn.execute(create_view_sql)
 
                 # Create indexes
                 create_indexes_sql = """
                     CREATE INDEX idx_materialized_view_combined ON stock_technical_view(stock_id, ticker_symbol, date);
                     CREATE INDEX idx_materialized_view_date ON stock_technical_view(date);
                 """
-                cursor.execute(create_indexes_sql)
+                await conn.execute(create_indexes_sql)
 
             else:
                 # If it exists, refresh the materialized view
                 refresh_view_sql = "REFRESH MATERIALIZED VIEW stock_technical_view;"
-                cursor.execute(refresh_view_sql)
+                await conn.execute(refresh_view_sql)
 
         # Update the date range for the view
-        update_view_date_range(conn, 'stock_technical_view', start_date, end_date)
-
-        # Commit the changes
-        conn.commit()
+        await async_update_view_date_range(conn, 'stock_technical_view', start_date, end_date)
 
     except Exception as e:
         print(f"Error: {e}")
 
-    finally:
-        # Close the connection
-        conn.close()
 
-def get_stock_technical_data_from_view(conn, stock_id, start_date, end_date):
+async def async_get_stock_technical_data_from_view(connection, stock_id, start_date, end_date):
     try:
-        with conn.cursor() as cursor:
-            # Select data from stock_technical_view based on the date range
-            select_data_sql = """
-                SELECT
-                    "date",
-                    "close",
-                    "ma_5_days_sma",
-                    "ma_20_days_sma",
-                    "ma_50_days_sma",
-                    "ma_200_days_sma",
-                    "ma_5_days_ema",
-                    "ma_20_days_ema",
-                    "ma_50_days_ema",
-                    "ma_200_days_ema",
-                    "bb_5_upper_band",
-                    "bb_5_lower_band",
-                    "bb_20_upper_band",
-                    "bb_20_lower_band",
-                    "bb_50_upper_band",
-                    "bb_50_lower_band",
-                    "bb_200_upper_band",
-                    "bb_200_lower_band",
-                    "14_days_rsi",
-                    "20_days_rsi",
-                    "50_days_rsi",
-                    "200_days_rsi"
-                FROM
-                    stock_technical_view
-                WHERE
-                    "date" >= %s AND "date" <= %s and "stock_id" = %s
-                ORDER BY
-                    "date" DESC;
-            """
-            cursor.execute(select_data_sql, (start_date, end_date, stock_id))
+        # Convert date strings to datetime.date objects
+        start_date = datetime.strptime(start_date, "%Y-%m-%d").date() if start_date else None
+        end_date = datetime.strptime(end_date, "%Y-%m-%d").date() if end_date else None
 
-            # Fetch all rows as a list of dictionaries
-            columns = [desc[0] for desc in cursor.description]
-            result = [dict(zip(columns, row)) for row in cursor.fetchall()]
+        # Select data from stock_technical_view based on the date range
+        select_data_sql = """
+            SELECT
+                "date",
+                "close",
+                "ma_5_days_sma",
+                "ma_20_days_sma",
+                "ma_50_days_sma",
+                "ma_200_days_sma",
+                "ma_5_days_ema",
+                "ma_20_days_ema",
+                "ma_50_days_ema",
+                "ma_200_days_ema",
+                "bb_5_upper_band",
+                "bb_5_lower_band",
+                "bb_20_upper_band",
+                "bb_20_lower_band",
+                "bb_50_upper_band",
+                "bb_50_lower_band",
+                "bb_200_upper_band",
+                "bb_200_lower_band",
+                "14_days_rsi",
+                "20_days_rsi",
+                "50_days_rsi",
+                "200_days_rsi"
+            FROM
+                stock_technical_view
+            WHERE
+                "date" >= $1 AND "date" <= $2 and "stock_id" = $3
+            ORDER BY
+                "date" DESC;
+        """
+        result = await connection.fetch(select_data_sql, start_date, end_date, stock_id)
 
-            return result
+        # Convert the result set to a list of dictionaries
+        result_list = [dict(row) for row in result]
 
-    except Exception as e:
+        return result_list    
+
+    except asyncpg.PostgresError as e:
         print(f"Error: {e}")
+        # Handle the error or re-raise it
+        raise e
 
-def check_stock_exists_in_view(connection, stock_id, ticker_symbol):
-    cursor = connection.cursor()
-    
+async def async_check_stock_exists_in_view(conn, stock_id, ticker_symbol):
     try:
         # SQL query to check if the stock exists in the materialized view
         query = """
             SELECT 1 
             FROM stock_technical_view 
-            WHERE stock_id = %s AND ticker_symbol = %s
+            WHERE stock_id = $1 AND ticker_symbol = $2
             LIMIT 1;
         """
-        cursor.execute(query, (stock_id, ticker_symbol))
-        
-        stock_exists = cursor.fetchone()
+        result = await conn.fetch(query, stock_id, ticker_symbol)
 
-        return stock_exists is not None
+        return len(result) > 0
 
     except Exception as e:
         print(f"Error checking if stock exists in the view: {e}")
         return False  # Return False in case of an error
 
-    finally:
-        cursor.close()
 
-def process_technical_analysis(ticker_symbol, country, start_date, end_date):
-    conn = create_connection()
-
+async def async_insert_data_async(connection, stock_data):
     try:
-        # Check if the company exists in the database and get its stock_id
-        stock_ids = check_company_exists(conn, ticker_symbol, country)
+        async with connection.transaction():
+            cursor = connection.cursor()
+            total_rowcount = 0
 
-        if not stock_ids:
-            print(f"Company with ticker symbol {ticker_symbol} in country {country} does not exist.")
-            return None  # Return None if the company does not exist
+            for data_point in stock_data.data:
+                query = """
+                    INSERT INTO "Stocks" ("transaction_id", "stock_id", "ticker_symbol", "date", "low", "open", "high", "volume", "close")
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
+                """
+                await cursor.execute(
+                    query,
+                    (
+                        data_point.transaction_id,
+                        stock_data.stock_id,
+                        stock_data.ticker_symbol,
+                        data_point.date,
+                        data_point.low,
+                        data_point.open_price,
+                        data_point.high,
+                        data_point.volume,
+                        data_point.close,
+                    ),
+                )
+                
+                total_rowcount += cursor.rowcount
 
-        # Assuming the check_company_exists returns a list, take the first stock_id
-        stock_id = stock_ids[0]
-
-        # Check if stock data exists in the Stocks table
-        if not stock_data_exists(conn, stock_id, ticker_symbol):
-            print(f"No stock data found for {ticker_symbol} with stock_id {stock_id} in the database. Need to fetch data.")
-            query_url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker_symbol}?symbol={ticker_symbol}&period1=0&period2=9999999999&interval=1d&includePrePost=true&events=div%2Csplit"
-
-            # Fetch stock data using the query_url and store it in a StockData object
-            arr_stock_data_history = fetch_stock_data_from_url(query_url)
-            stock_data = StockData(stock_id, ticker_symbol, country, data=arr_stock_data_history)
-            
-            process_stock_data_with_spark(stock_data)
-
-            technical_data = stock_data.data
-            # Insert the fetched stock data into the database
-            # insert_stock_data_into_db(conn, stock_data)
-
-            # print(f"Stock data for {ticker_symbol} with stock_id {stock_id} fetched from Yahoo Finance and inserted into the database.")
-        else:
-            # Check if the stock exists in the materialized view
-            stock_exists_in_view = check_stock_exists_in_view(conn, stock_id, ticker_symbol)
-
-            if stock_exists_in_view:
-                # Calculate start and end dates for the view
-                view_start_date, view_end_date = get_view_date_range(conn, 'stock_technical_view')
-
-                # Check for date range overlap
-                if check_date_range_overlap(view_start_date, view_end_date, start_date, end_date):
-                    # If there is an overlap, use get_stock_technical_data_from_view
-                    technical_data = get_stock_technical_data_from_view(conn, stock_id, start_date, end_date)
-                else:
-                    # If no overlap, use get_stock_technical_data_from_tables
-                    technical_data = get_stock_technical_data_from_tables(conn, stock_id, start_date, end_date)
+            if total_rowcount > 0:
+                print(f"Total rows inserted: {total_rowcount}")
             else:
-                # If stock does not exist in view, use get_stock_technical_data_from_tables
-                technical_data = get_stock_technical_data_from_tables(conn, stock_id, start_date, end_date)
-
-        # Process the technical data as needed
-        # For demonstration, let's just return the data
-        return {
-            'stock_id': stock_id,
-            'ticker_symbol': ticker_symbol,
-            'technical_analysis': technical_data
-        }
+                print("No rows were affected. Possible duplicate or failed insert.")
 
     except Exception as e:
-        print(f"Error processing technical analysis: {e}")
-        return None  # Return None in case of an error
-    finally:
-        # Close the connection
-        conn.close()
-
-async def insert_stock_data_async(connection, stock_data):
-    cursor = None
-    try:
-        cursor = connection.cursor()
-        total_rowcount = 0  # Initialize a variable to track the total rowcount
-
-        for data_point in stock_data.data:
-            query = """
-                INSERT INTO "Stocks" ("transaction_id", "stock_id", "ticker_symbol", "date", "low", "open", "high", "volume", "close")
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
-            """
-            cursor.execute(query, (data_point.transaction_id, stock_data.stock_id, stock_data.ticker_symbol, data_point.date, data_point.low, data_point.open_price, data_point.high, data_point.volume, data_point.close))
-            
-            # Add the rowcount of the current execute to the total rowcount
-            total_rowcount += cursor.rowcount
-        
-        # Check if any rows were affected
-        if total_rowcount > 0:
-            print(f"Total rows inserted: {total_rowcount}")
-            connection.commit()
-        else:
-            print("No rows were affected. Possible duplicate or failed insert.")
-            connection.rollback()
-
-        return total_rowcount  # Return the total rowcount
-
-    except Exception as e:
-        connection.rollback()
         print(f"Error inserting stock data into the database: {e}")
-        return 0  # Return 0 in case of an error
-    finally:
-        if cursor:
-            cursor.close()
 
 async def async_insert_data(connection, stock_data):
-    # Call the asynchronous function to insert stock data
-    await insert_stock_data_async(connection, stock_data)
+    try:
+        await async_insert_data_async(connection, stock_data)
+    except Exception as e:
+        print(f"Error during async_insert_data: {e}")
 
 
 
-def process_stock_data(spark, ticker_symbol, country, start_date, end_date, technical_requested):
+async def process_stock_data(spark, ticker_symbol, country, start_date, end_date, technical_requested):
     try:
         result = None
-        # Get a database connection
-        connection = create_connection()
-        cursor = connection.cursor()
+        # Get a database connection from the pool
+        pool, connection = await async_create_connection()
+        
+        try:
+            # Check if the company exists and get the stock_ids
+            stock_ids = await async_check_company_exists(connection, ticker_symbol, country)
 
-        # Check if the company exists and get the stock_ids
-        stock_ids = check_company_exists(connection, ticker_symbol, country)
+            if stock_ids:
+                # Use the first stock_id retrieved
+                stock_id = stock_ids[0]
 
-        if stock_ids:
-            # Use the first stock_id retrieved
-            stock_id = stock_ids[0]
+                # Use stock_data_exists function to check if data exists in table for the given stock_id, ticker_symbol, and date range
+                data_exists = await async_stock_data_exists(connection, stock_id, ticker_symbol, start_date, end_date)
 
-            # Use stock_data_exists function to check if data exists in table for the given stock_id, ticker_symbol, and date range
-            data_exists = stock_data_exists(connection, stock_id, ticker_symbol, start_date, end_date)
-
-            if data_exists:
-                # Data exists
-                if not technical_requested:
-                    # If technical_requested is False, return the stock data
-                    result = {
-                        "stock_id": stock_id, 
-                        "ticker_symbol": ticker_symbol, 
-                        "country": country, 
-                        "data": data_exists
-                    }
-                else:
-                    # Try to get technical data from a view
-                    technical_data_from_view = get_stock_technical_data_from_view(connection, stock_id, start_date, end_date)
-
-                    if technical_data_from_view:
-                        # If data is found in the view, use it
-                        technical_data = technical_data_from_view
-
-                        # Print the DataFrame
-                        print(f'{ticker_symbol} has Technical Data from View')
-                        
+                if data_exists:
+                    # Data exists
+                    if not technical_requested:
+                        # If technical_requested is False, return the stock data
                         result = {
                             "stock_id": stock_id, 
                             "ticker_symbol": ticker_symbol, 
                             "country": country, 
-                            "technical_view": technical_data
+                            "data": data_exists
                         }
                     else:
-                        # If data is not found in the view, try to get it from tables
-                        technical_data_from_tables = get_stock_technical_data_from_tables(connection, stock_id, start_date, end_date)
+                        # Try to get technical data from a view
+                        technical_data_from_view = await async_get_stock_technical_data_from_view(connection, stock_id, start_date, end_date)
 
-                        if technical_data_from_tables:
-                            # If data is found in tables, use it
-                            result = technical_data_from_tables
+                        if technical_data_from_view:
+                            # If data is found in the view, use it
+                            technical_data = technical_data_from_view
+
+                            # Print the DataFrame
+                            print(f'{ticker_symbol} has Technical Data from View')
+                            
+                            result = {
+                                "stock_id": stock_id, 
+                                "ticker_symbol": ticker_symbol, 
+                                "country": country, 
+                                "technical_view": technical_data
+                            }
                         else:
-                            # drop that stock in tables and recalcualte everything again for that stock only
-                            # If no data is found in both view and tables, print a message
-                            print("Will implement data processing function!!!!!!!")
-                            # result = perform_data_processing(ticker_symbol, country, start_date, end_date, stock_id)
-            else:
-                # Stock data does not exist in the database
-                print(f"No stock data found for {ticker_symbol} with stock_id {stock_id} in the database. Need to fetch data.")
-                query_url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker_symbol}?symbol={ticker_symbol}&period1=0&period2=9999999999&interval=1d&includePrePost=true&events=div%2Csplit"
+                            # If data is not found in the view, try to get it from tables
+                            technical_data_from_tables = await async_get_stock_technical_data_from_tables(connection, stock_id, start_date, end_date)
 
-                # Fetch stock data using the query_url and store it in a StockData object
-                arr_stock_data_history = fetch_stock_data_from_url(query_url)
-                stock_data = StockData(stock_id, ticker_symbol, country, data=arr_stock_data_history)
-                
-                # Check if stock_data is not empty before proceeding with Spark processing
-                if not stock_data.data:
-                    print("Error: Stock data is empty.")
+                            if technical_data_from_tables:
+                                # If data is found in tables, use it
+                                result = technical_data_from_tables
+                            else:
+                                # drop that stock in tables and recalculate everything again for that stock only
+                                # If no data is found in both view and tables, print a message
+                                print("Will implement data processing function!!!!!!!")
+                                # result = perform_data_processing(ticker_symbol, country, start_date, end_date, stock_id)
                 else:
-                    # print(f'{ticker_symbol} is being inserted to the table')
-                    # # Create an event loop
-                    # loop = asyncio.get_event_loop()
-                    # loop.create_task(async_insert_data(connection,stock_data))
+                    # Stock data does not exist in the database
+                    print(f"No stock data found for {ticker_symbol} with stock_id {stock_id} in the database. Need to fetch data.")
+                    query_url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker_symbol}?symbol={ticker_symbol}&period1=0&period2=9999999999&interval=1d&includePrePost=true&events=div%2Csplit"
 
-            
-                    # print(f'Continue while inserting')
-
-                    if not technical_requested:
-                        # If technical_requested is False, return the fetched stock data
-                        filter_data = [entry for entry in stock_data.data if start_date <= entry.date <= end_date]
-                        stock_data.data = filter_data
-                        result = stock_data.to_dict()
-
-                        # Convert the list of dictionaries to a DataFrame
-                        # test = [entry.to_dict() for entry in filter_data]
-                        # df = pd.DataFrame(test)
-
-                        # # Add literal columns
-                        # df['stock_id'] = stock_id
-                        # df['ticker_symbol'] = ticker_symbol
-                        # df['country'] = country
-
-                        # # Reorder columns to have literal columns first
-                        # column_order = ['stock_id', 'ticker_symbol', 'country'] + [col for col in df.columns if col not in ['stock_id', 'ticker_symbol', 'country']]
-                        # df = df[column_order]
-
-                        # # Print the DataFrame
-                        # print(df.to_string(max_colwidth=1000))
-
+                    # Fetch stock data using the query_url and store it in a StockData object
+                    arr_stock_data_history = fetch_stock_data_from_url(query_url)
+                    stock_data = StockData(stock_id, ticker_symbol, country, data=arr_stock_data_history)
+                    
+                    # Check if stock_data is not empty before proceeding with Spark processing
+                    if not stock_data.data:
+                        print("Error: Stock data is empty.")
                     else:
-                        # Process stock data with Spark
-                        technical_data, filtered_technical_data = process_stock_data_with_spark(spark, stock_data, start_date, end_date)
+                        # inserting price movement async 
+                        # print(f'{ticker_symbol} is being inserted to the table')
+                        # stock_price_movements = copy.deepcopy(stock_data)
+                    
+                        # loop = asyncio.get_event_loop()
+                        # loop.create_task(async_insert_data(stock_price_movements))
 
-                        if filtered_technical_data:
-                            # Display unfiltered technical data
-                            print("Filtered Technical Data:")
-                            filtered_technical_data.show()
+                        # print(f'Continue while inserting')
 
-                            # Extract the columns you need
-                            stock_id = filtered_technical_data.select("stock_id").first()[0]
-                            ticker_symbol = filtered_technical_data.select("ticker_symbol").first()[0]
-
-                            # List of columns to exclude from the final list of dictionaries
-                            exclude_columns = ["stock_id", "ticker_symbol"]
-
-                            # Remove the columns from the DataFrame
-                            filtered_technical_data = filtered_technical_data.drop(*exclude_columns)
-
-                            # Convert DataFrame to list of dictionaries
-                            technical_data_list = filtered_technical_data.toPandas().to_dict('records')
-
-                            # Create the final dictionary
-                            result = {"stock_id": stock_id, "ticker_symbol": ticker_symbol, "technical": technical_data_list}
+                        if not technical_requested:
+                            # If technical_requested is False, return the fetched stock data
+                            filter_data = [entry for entry in stock_data.data if start_date <= entry.date <= end_date]
+                            stock_data.data = filter_data
+                            result = stock_data.to_dict()
 
                         else:
-                            print("Error: Unable to process stock data with Spark.")
-        else:
-            # Company does not exist, you may want to handle this case accordingly
-            print("Company does not exist. Handle this case accordingly.")
-            result = None
+                            # Process stock data with Spark
+                            technical_data, filtered_technical_data = process_stock_data_with_spark(spark, stock_data, start_date, end_date)
 
-        # Close the database connection
-        cursor.close()
-        connection.close()
+                            if filtered_technical_data:
+                                # Display unfiltered technical data
+                                print("Filtered Technical Data:")
+                                filtered_technical_data.show()
+
+                                # Extract the columns you need
+                                stock_id = filtered_technical_data.select("stock_id").first()[0]
+                                ticker_symbol = filtered_technical_data.select("ticker_symbol").first()[0]
+
+                                # List of columns to exclude from the final list of dictionaries
+                                exclude_columns = ["stock_id", "ticker_symbol"]
+
+                                # Remove the columns from the DataFrame
+                                filtered_technical_data = filtered_technical_data.drop(*exclude_columns)
+
+                                # Convert DataFrame to list of dictionaries
+                                technical_data_list = filtered_technical_data.toPandas().to_dict('records')
+
+                                # Create the final dictionary
+                                result = {"stock_id": stock_id, "ticker_symbol": ticker_symbol, "technical": technical_data_list}
+
+                            else:
+                                print("Error: Unable to process stock data with Spark.")
+            else:
+                # Company does not exist, you may want to handle this case accordingly
+                print("Company does not exist. Handle this case accordingly.")
+                result = None
+        finally:
+            # Release the connection back to the pool
+            await pool.release(connection)
         return result
 
     except (Exception, psycopg2.DatabaseError) as error:
