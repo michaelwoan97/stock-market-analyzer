@@ -1,7 +1,9 @@
+import asyncio
 from datetime import datetime, timedelta
 import json
 import os
 import uuid
+from altair import Data
 from matplotlib import ticker
 import pandas as pd
 import psycopg2
@@ -1378,6 +1380,46 @@ def process_technical_analysis(ticker_symbol, country, start_date, end_date):
         # Close the connection
         conn.close()
 
+async def insert_stock_data_async(connection, stock_data):
+    cursor = None
+    try:
+        cursor = connection.cursor()
+        total_rowcount = 0  # Initialize a variable to track the total rowcount
+
+        for data_point in stock_data.data:
+            query = """
+                INSERT INTO "Stocks" ("transaction_id", "stock_id", "ticker_symbol", "date", "low", "open", "high", "volume", "close")
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
+            """
+            cursor.execute(query, (data_point.transaction_id, stock_data.stock_id, stock_data.ticker_symbol, data_point.date, data_point.low, data_point.open_price, data_point.high, data_point.volume, data_point.close))
+            
+            # Add the rowcount of the current execute to the total rowcount
+            total_rowcount += cursor.rowcount
+        
+        # Check if any rows were affected
+        if total_rowcount > 0:
+            print(f"Total rows inserted: {total_rowcount}")
+            connection.commit()
+        else:
+            print("No rows were affected. Possible duplicate or failed insert.")
+            connection.rollback()
+
+        return total_rowcount  # Return the total rowcount
+
+    except Exception as e:
+        connection.rollback()
+        print(f"Error inserting stock data into the database: {e}")
+        return 0  # Return 0 in case of an error
+    finally:
+        if cursor:
+            cursor.close()
+
+async def async_insert_data(connection, stock_data):
+    # Call the asynchronous function to insert stock data
+    await insert_stock_data_async(connection, stock_data)
+
+
+
 def process_stock_data(spark, ticker_symbol, country, start_date, end_date, technical_requested):
     try:
         result = None
@@ -1399,26 +1441,29 @@ def process_stock_data(spark, ticker_symbol, country, start_date, end_date, tech
                 # Data exists
                 if not technical_requested:
                     # If technical_requested is False, return the stock data
-                    result = data_exists
-
-                    # Convert the list of dictionaries to a DataFrame
-                    df = pd.DataFrame(result)
-
-                    # Print the DataFrame
-                    print(df)
+                    result = {
+                        "stock_id": stock_id, 
+                        "ticker_symbol": ticker_symbol, 
+                        "country": country, 
+                        "data": data_exists
+                    }
                 else:
                     # Try to get technical data from a view
                     technical_data_from_view = get_stock_technical_data_from_view(connection, stock_id, start_date, end_date)
 
                     if technical_data_from_view:
                         # If data is found in the view, use it
-                        result = technical_data_from_view
-
-                        # Convert the list of dictionaries to a DataFrame
-                        df = pd.DataFrame(result)
+                        technical_data = technical_data_from_view
 
                         # Print the DataFrame
-                        print(df)
+                        print(f'{ticker_symbol} has Technical Data from View')
+                        
+                        result = {
+                            "stock_id": stock_id, 
+                            "ticker_symbol": ticker_symbol, 
+                            "country": country, 
+                            "technical_view": technical_data
+                        }
                     else:
                         # If data is not found in the view, try to get it from tables
                         technical_data_from_tables = get_stock_technical_data_from_tables(connection, stock_id, start_date, end_date)
@@ -1440,35 +1485,67 @@ def process_stock_data(spark, ticker_symbol, country, start_date, end_date, tech
                 arr_stock_data_history = fetch_stock_data_from_url(query_url)
                 stock_data = StockData(stock_id, ticker_symbol, country, data=arr_stock_data_history)
                 
-                if not technical_requested:
-                    # If technical_requested is False, return the fetched stock data
-                    filter_data = [entry for entry in stock_data.data if start_date <= entry.date <= end_date]
-                    stock_data.data = filter_data
-                    result = stock_data.to_dict()
-
-                    # Convert the list of dictionaries to a DataFrame
-                    # test = [entry.to_dict() for entry in filter_data]
-                    # df = pd.DataFrame(test)
-
-                    # # Add literal columns
-                    # df['stock_id'] = stock_id
-                    # df['ticker_symbol'] = ticker_symbol
-                    # df['country'] = country
-
-                    # # Reorder columns to have literal columns first
-                    # column_order = ['stock_id', 'ticker_symbol', 'country'] + [col for col in df.columns if col not in ['stock_id', 'ticker_symbol', 'country']]
-                    # df = df[column_order]
-
-                    # # Print the DataFrame
-                    # print(df.to_string(max_colwidth=1000))
-
+                # Check if stock_data is not empty before proceeding with Spark processing
+                if not stock_data.data:
+                    print("Error: Stock data is empty.")
                 else:
-                    # Process stock data with Spark
-                    process_stock_data_with_spark(spark, stock_data)
+                    # print(f'{ticker_symbol} is being inserted to the table')
+                    # # Create an event loop
+                    # loop = asyncio.get_event_loop()
+                    # loop.create_task(async_insert_data(connection,stock_data))
 
-                    # Retrieve technical data from the stock_data object
-                    technical_data = stock_data.data
-                    result = technical_data
+            
+                    # print(f'Continue while inserting')
+
+                    if not technical_requested:
+                        # If technical_requested is False, return the fetched stock data
+                        filter_data = [entry for entry in stock_data.data if start_date <= entry.date <= end_date]
+                        stock_data.data = filter_data
+                        result = stock_data.to_dict()
+
+                        # Convert the list of dictionaries to a DataFrame
+                        # test = [entry.to_dict() for entry in filter_data]
+                        # df = pd.DataFrame(test)
+
+                        # # Add literal columns
+                        # df['stock_id'] = stock_id
+                        # df['ticker_symbol'] = ticker_symbol
+                        # df['country'] = country
+
+                        # # Reorder columns to have literal columns first
+                        # column_order = ['stock_id', 'ticker_symbol', 'country'] + [col for col in df.columns if col not in ['stock_id', 'ticker_symbol', 'country']]
+                        # df = df[column_order]
+
+                        # # Print the DataFrame
+                        # print(df.to_string(max_colwidth=1000))
+
+                    else:
+                        # Process stock data with Spark
+                        technical_data, filtered_technical_data = process_stock_data_with_spark(spark, stock_data, start_date, end_date)
+
+                        if filtered_technical_data:
+                            # Display unfiltered technical data
+                            print("Filtered Technical Data:")
+                            filtered_technical_data.show()
+
+                            # Extract the columns you need
+                            stock_id = filtered_technical_data.select("stock_id").first()[0]
+                            ticker_symbol = filtered_technical_data.select("ticker_symbol").first()[0]
+
+                            # List of columns to exclude from the final list of dictionaries
+                            exclude_columns = ["stock_id", "ticker_symbol"]
+
+                            # Remove the columns from the DataFrame
+                            filtered_technical_data = filtered_technical_data.drop(*exclude_columns)
+
+                            # Convert DataFrame to list of dictionaries
+                            technical_data_list = filtered_technical_data.toPandas().to_dict('records')
+
+                            # Create the final dictionary
+                            result = {"stock_id": stock_id, "ticker_symbol": ticker_symbol, "technical": technical_data_list}
+
+                        else:
+                            print("Error: Unable to process stock data with Spark.")
         else:
             # Company does not exist, you may want to handle this case accordingly
             print("Company does not exist. Handle this case accordingly.")

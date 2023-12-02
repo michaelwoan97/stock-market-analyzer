@@ -1,7 +1,13 @@
 from pyspark.sql.functions import col, lit
 import uuid
 from pyspark.sql.types import StructType, StructField, StringType, DateType, FloatType, IntegerType
+from pyspark.sql.window import Window
 from pyspark.sql import functions as F
+
+# Array numbers for moving averages, Bollinger Bands, and RSI
+ma_periods = [5, 20, 50, 200]
+bollinger_periods = [5, 20, 50, 200]
+rsi_periods = [14, 20, 50, 200]
 
 def clean_stock_data(spark, stock_data):
     try:
@@ -52,15 +58,116 @@ def clean_stock_data(spark, stock_data):
         cleaned_stock_data = cleaned_stock_data.withColumn("ticker_symbol", lit(stock_data.ticker_symbol))
 
         # Reorder the columns
-        cleaned_stock_data = cleaned_stock_data.select("stock_id", "ticker_symbol", "transaction_id", "date", "low", "open", "high", "volume", "close")
+        cleaned_stock_data = cleaned_stock_data.select("stock_id", "ticker_symbol", "transaction_id", "date", "low", "open", "high", "volume", "close").orderBy(F.desc("date"))
 
-        cleaned_stock_data.orderBy(F.desc("date")).show()
+        # cleaned_stock_data.orderBy(F.desc("date")).show()
 
         return cleaned_stock_data
 
     except Exception as e:
         # Handle any exception that might occur during the process
         print(f"Error in clean_stock_data: {e}")
+        return None
+
+def calculate_moving_averages(cleaned_stock_data, periods):
+    try:
+        round_to_decimal = 2
+        # Generate a UUID for each row
+        cleaned_stock_data = cleaned_stock_data.withColumn("cal_id", F.monotonically_increasing_id())
+
+        def calculate_ema(data, alpha):
+            ema = data[0]
+            for i in range(1, len(data)):
+                ema = alpha * data[i] + (1 - alpha) * ema
+            return ema
+
+        calculate_ema_udf = F.udf(lambda data, alpha: round(float(calculate_ema(data, alpha)), round_to_decimal), FloatType())
+
+        alpha_values = [2 / (p + 1) for p in periods]
+
+        partition_cols = ["stock_id", "ticker_symbol"]
+
+        windows = [Window().partitionBy(partition_cols).orderBy(F.desc("date")).rowsBetween(0, p - 1) for p in periods]
+
+        # Calculate simple moving averages
+        for p in periods:
+            cleaned_stock_data = cleaned_stock_data.withColumn(f"{p}_days_sma", F.round(F.avg("close").over(windows[periods.index(p)]), 2))
+
+        # Calculate exponential moving averages using UDF
+        for p, alpha in zip(periods, alpha_values):
+            cleaned_stock_data = cleaned_stock_data.withColumn(f"{p}_days_ema", F.round(calculate_ema_udf(F.collect_list("close").over(windows[periods.index(p)]), F.lit(alpha)), round_to_decimal))
+
+        # Show the result
+        moving_averages_data = cleaned_stock_data.select(['cal_id', 'transaction_id', "stock_id", "ticker_symbol", 'date', 'close'] + [f"{p}_days_sma" for p in periods] + [f"{p}_days_ema" for p in periods]).orderBy(F.desc("date"))
+        # moving_averages_data.show()
+
+        return moving_averages_data
+
+    except Exception as e:
+        # Handle any exception that might occur during the process
+        print(f"Error in calculate_moving_averages: {e}")
+        return None
+
+def calculate_bollinger_bands(cleaned_stock_data, bollinger_periods):
+    try:
+        round_to_decimal = 2
+        partition_cols = ["stock_id", "ticker_symbol"]
+        windows = [Window().partitionBy(partition_cols).orderBy(F.desc("date")).rowsBetween(0, p - 1) for p in bollinger_periods]
+
+        for p in bollinger_periods:
+            upper_band_col = col(f"{p}_days_ema") + (2 * F.stddev("close").over(windows[bollinger_periods.index(p)]))
+            lower_band_col = col(f"{p}_days_ema") - (2 * F.stddev("close").over(windows[bollinger_periods.index(p)]))
+
+            cleaned_stock_data = cleaned_stock_data.withColumn(f"{p}_upper_band", F.round(upper_band_col, round_to_decimal))
+            cleaned_stock_data = cleaned_stock_data.withColumn(f"{p}_lower_band", F.round(lower_band_col, round_to_decimal))
+
+        # cleaned_stock_data.show()
+        return cleaned_stock_data
+
+    except Exception as e:
+        print(f"Error in calculate_bollinger_bands: {e}")
+        return None
+
+def calculate_rsi(data, n, round_to_decimal=2):
+    # Calculate price changes
+    price_diff = F.col("close") - F.lag("close", 1).over(Window().partitionBy("stock_id", "ticker_symbol").orderBy("date"))
+    
+    # Separate gains and losses
+    gains = F.when(price_diff > 0, price_diff).otherwise(0)
+    losses = F.when(price_diff < 0, -price_diff).otherwise(0)
+    
+    # Calculate average gains and losses over n periods from the latest day backward
+    avg_gains = F.avg(gains).over(Window().partitionBy("stock_id", "ticker_symbol").orderBy(F.desc("date")).rowsBetween(0, n-1))
+    avg_losses = F.avg(losses).over(Window().partitionBy("stock_id", "ticker_symbol").orderBy(F.desc("date")).rowsBetween(0, n-1))
+    
+    # Handle NULL values for average gains
+    avg_gains = F.coalesce(avg_gains, F.lit(0))
+
+    # Handle 0 values for average losses
+    avg_losses = F.when(avg_losses.isNull() | (avg_losses == 0), 0).otherwise(avg_losses)
+
+    # Calculate RSI
+    rs = F.when((avg_losses == 0) & (avg_gains != 0), F.lit(avg_gains)) \
+      .when((avg_losses != 0) & (avg_gains == 0), F.lit(0)) \
+      .otherwise(F.when(avg_losses == 0, F.lit(float('inf'))) \
+                  .otherwise(avg_gains / avg_losses))
+    
+    # Calculate RSI and round to specified decimal places
+    rsi = 100 - (100 / (1 + rs))
+    
+    return F.round(rsi, round_to_decimal)
+
+def calculate_relative_strength_index(cleaned_stock_data, rsi_periods):
+    try:
+        for n in rsi_periods:
+            column_name = f"{n}_days_rsi"
+            cleaned_stock_data = cleaned_stock_data.withColumn(column_name, calculate_rsi(cleaned_stock_data, n))
+
+        # cleaned_stock_data.show()
+        return cleaned_stock_data
+
+    except Exception as e:
+        print(f"Error in calculate_relative_strength_index: {e}")
         return None
     
 def display_stock_data(spark, stock_data):
@@ -97,5 +204,22 @@ def display_stock_data(spark, stock_data):
         print(f"Error: {e}")
 
 
-def process_stock_data_with_spark(spark, stock_data):
-    clean_stock_data(spark,stock_data)
+def process_stock_data_with_spark(spark, stock_data, start_date, end_date):
+    try:
+        cleaned_data = clean_stock_data(spark, stock_data)
+        moving_averages_data = calculate_moving_averages(cleaned_data, ma_periods)
+        bollinger_bands_data = calculate_bollinger_bands(moving_averages_data, bollinger_periods)
+        rsi_data = calculate_relative_strength_index(bollinger_bands_data, rsi_periods)
+
+        if rsi_data:
+            # Filter the data based on the specified date range
+            filtered_rsi_data = rsi_data.filter((F.col("date") >= start_date) & (F.col("date") <= end_date))
+            return rsi_data, filtered_rsi_data
+        else:
+            print("Error: Unable to process data.")
+            return None, None
+
+    except Exception as e:
+        print(f"Error in process_stock_data_with_spark: {e}")
+        return None, None
+    
