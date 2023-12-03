@@ -102,7 +102,7 @@ create_tables_sql = [
     """
     -- New MovingAverages table with constraints
     CREATE TABLE IF NOT EXISTS "MovingAverages" (
-        "cal_id" BIGINT,
+        "cal_id" UUID UNIQUE,
         "transaction_id" UUID,
         "stock_id" UUID,
         "ticker_symbol" VARCHAR,
@@ -125,7 +125,7 @@ create_tables_sql = [
     """
     -- New BoillingerBands table with constraints
     CREATE TABLE IF NOT EXISTS "BoillingerBands" (
-        "cal_id" BIGINT,
+        "cal_id" UUID UNIQUE,
         "transaction_id" UUID,
         "stock_id" UUID,
         "ticker_symbol" VARCHAR,
@@ -148,7 +148,7 @@ create_tables_sql = [
     """
     -- New RelativeIndexes table with constraints
     CREATE TABLE IF NOT EXISTS "RelativeIndexes" (
-        "cal_id" BIGINT,
+        "cal_id" UUID UNIQUE,
         "transaction_id" UUID,
         "stock_id" UUID,
         "ticker_symbol" VARCHAR,

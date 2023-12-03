@@ -9,6 +9,11 @@ ma_periods = [5, 20, 50, 200]
 bollinger_periods = [5, 20, 50, 200]
 rsi_periods = [14, 20, 50, 200]
 
+# Define a UDF to generate UUIDs
+@F.udf(StringType())
+def generate_uuid():
+    return str(uuid.uuid4())
+
 def clean_stock_data(spark, stock_data):
     try:
         # Convert PriceMovement objects to dictionaries
@@ -73,7 +78,7 @@ def calculate_moving_averages(cleaned_stock_data, periods):
     try:
         round_to_decimal = 2
         # Generate a UUID for each row
-        cleaned_stock_data = cleaned_stock_data.withColumn("cal_id", F.monotonically_increasing_id())
+        cleaned_stock_data = cleaned_stock_data.withColumn("cal_id", generate_uuid())
 
         def calculate_ema(data, alpha):
             ema = data[0]
@@ -212,6 +217,7 @@ def process_stock_data_with_spark(spark, stock_data, start_date, end_date):
         rsi_data = calculate_relative_strength_index(bollinger_bands_data, rsi_periods)
 
         if rsi_data:
+            
             # Filter the data based on the specified date range
             filtered_rsi_data = rsi_data.filter((F.col("date") >= start_date) & (F.col("date") <= end_date))
             return rsi_data, filtered_rsi_data

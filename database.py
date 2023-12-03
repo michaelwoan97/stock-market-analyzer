@@ -1198,6 +1198,74 @@ async def async_get_stock_technical_data_from_tables(connection, stock_id, start
         print(f"Error fetching technical data: {e}")
         return None
 
+async def async_get_stock_technical_data_from_view(connection, stock_id, start_date, end_date):
+    try:
+        # Convert date strings to datetime.date objects
+        start_date = datetime.strptime(start_date, "%Y-%m-%d").date() if start_date else None
+        end_date = datetime.strptime(end_date, "%Y-%m-%d").date() if end_date else None
+
+        # Select data from stock_technical_view based on the date range
+        select_data_sql = """
+            SELECT
+                "date",
+                "close",
+                "ma_5_days_sma",
+                "ma_20_days_sma",
+                "ma_50_days_sma",
+                "ma_200_days_sma",
+                "ma_5_days_ema",
+                "ma_20_days_ema",
+                "ma_50_days_ema",
+                "ma_200_days_ema",
+                "bb_5_upper_band",
+                "bb_5_lower_band",
+                "bb_20_upper_band",
+                "bb_20_lower_band",
+                "bb_50_upper_band",
+                "bb_50_lower_band",
+                "bb_200_upper_band",
+                "bb_200_lower_band",
+                "14_days_rsi",
+                "20_days_rsi",
+                "50_days_rsi",
+                "200_days_rsi"
+            FROM
+                stock_technical_view
+            WHERE
+                "date" >= $1 AND "date" <= $2 and "stock_id" = $3
+            ORDER BY
+                "date" DESC;
+        """
+        result = await connection.fetch(select_data_sql, start_date, end_date, stock_id)
+
+        # Convert the result set to a list of dictionaries
+        result_list = [dict(row) for row in result]
+
+        return result_list    
+
+    except asyncpg.PostgresError as e:
+        print(f"Error: {e}")
+        # Handle the error or re-raise it
+        raise e
+
+async def async_check_stock_exists_in_view(conn, stock_id, ticker_symbol):
+    try:
+        # SQL query to check if the stock exists in the materialized view
+        query = """
+            SELECT 1 
+            FROM stock_technical_view 
+            WHERE stock_id = $1 AND ticker_symbol = $2
+            LIMIT 1;
+        """
+        result = await conn.fetch(query, stock_id, ticker_symbol)
+
+        return len(result) > 0
+
+    except Exception as e:
+        print(f"Error checking if stock exists in the view: {e}")
+        return False  # Return False in case of an error
+
+# create or refresh materialized view 
 async def async_create_or_refresh_materialized_view_with_partition(conn):
     try:
         # Calculate start and end dates dynamically (e.g., 10 years from now)
@@ -1277,93 +1345,26 @@ async def async_create_or_refresh_materialized_view_with_partition(conn):
     except Exception as e:
         print(f"Error: {e}")
 
-
-async def async_get_stock_technical_data_from_view(connection, stock_id, start_date, end_date):
-    try:
-        # Convert date strings to datetime.date objects
-        start_date = datetime.strptime(start_date, "%Y-%m-%d").date() if start_date else None
-        end_date = datetime.strptime(end_date, "%Y-%m-%d").date() if end_date else None
-
-        # Select data from stock_technical_view based on the date range
-        select_data_sql = """
-            SELECT
-                "date",
-                "close",
-                "ma_5_days_sma",
-                "ma_20_days_sma",
-                "ma_50_days_sma",
-                "ma_200_days_sma",
-                "ma_5_days_ema",
-                "ma_20_days_ema",
-                "ma_50_days_ema",
-                "ma_200_days_ema",
-                "bb_5_upper_band",
-                "bb_5_lower_band",
-                "bb_20_upper_band",
-                "bb_20_lower_band",
-                "bb_50_upper_band",
-                "bb_50_lower_band",
-                "bb_200_upper_band",
-                "bb_200_lower_band",
-                "14_days_rsi",
-                "20_days_rsi",
-                "50_days_rsi",
-                "200_days_rsi"
-            FROM
-                stock_technical_view
-            WHERE
-                "date" >= $1 AND "date" <= $2 and "stock_id" = $3
-            ORDER BY
-                "date" DESC;
-        """
-        result = await connection.fetch(select_data_sql, start_date, end_date, stock_id)
-
-        # Convert the result set to a list of dictionaries
-        result_list = [dict(row) for row in result]
-
-        return result_list    
-
-    except asyncpg.PostgresError as e:
-        print(f"Error: {e}")
-        # Handle the error or re-raise it
-        raise e
-
-async def async_check_stock_exists_in_view(conn, stock_id, ticker_symbol):
-    try:
-        # SQL query to check if the stock exists in the materialized view
-        query = """
-            SELECT 1 
-            FROM stock_technical_view 
-            WHERE stock_id = $1 AND ticker_symbol = $2
-            LIMIT 1;
-        """
-        result = await conn.fetch(query, stock_id, ticker_symbol)
-
-        return len(result) > 0
-
-    except Exception as e:
-        print(f"Error checking if stock exists in the view: {e}")
-        return False  # Return False in case of an error
-
-
-async def async_insert_data_async(connection, stock_data):
+# insert data to "Stocks" table
+async def async_insert_stock_data_table(connection, stock_data):
     try:
         async with connection.transaction():
-            cursor = connection.cursor()
             total_rowcount = 0
 
             for data_point in stock_data.data:
+                data_point_date = datetime.strptime(data_point.date, '%Y-%m-%d')
                 query = """
                     INSERT INTO "Stocks" ("transaction_id", "stock_id", "ticker_symbol", "date", "low", "open", "high", "volume", "close")
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9);
                 """
-                await cursor.execute(
+
+                await connection.execute(
                     query,
-                    (
+                    *(
                         data_point.transaction_id,
                         stock_data.stock_id,
                         stock_data.ticker_symbol,
-                        data_point.date,
+                        data_point_date,
                         data_point.low,
                         data_point.open_price,
                         data_point.high,
@@ -1372,21 +1373,176 @@ async def async_insert_data_async(connection, stock_data):
                     ),
                 )
                 
-                total_rowcount += cursor.rowcount
+                total_rowcount += 1
 
             if total_rowcount > 0:
-                print(f"Total rows inserted: {total_rowcount}")
+                print(f"Total rows inserted into Stocks table: {total_rowcount}")
             else:
-                print("No rows were affected. Possible duplicate or failed insert.")
+                print("No rows were affected. Possible duplicate or failed insert into Stocks table.")
 
     except Exception as e:
         print(f"Error inserting stock data into the database: {e}")
 
-async def async_insert_data(connection, stock_data):
+# ---- Insert Operations into technical data tables ----
+async def async_insert_moving_averages(connection, moving_averages_data):
     try:
-        await async_insert_data_async(connection, stock_data)
+        async with connection.transaction():
+            total_rowcount = 0
+            for data_point in moving_averages_data:
+                query = """
+                    INSERT INTO "MovingAverages" ("cal_id", "transaction_id", "stock_id", "ticker_symbol", "date",
+                                                  "5_days_sma", "20_days_sma", "50_days_sma", "200_days_sma",
+                                                  "5_days_ema", "20_days_ema", "50_days_ema", "200_days_ema")
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13);
+                """
+                await connection.execute(
+                    query,
+                    *(
+                        data_point['cal_id'],
+                        data_point['transaction_id'],
+                        data_point['stock_id'],
+                        data_point['ticker_symbol'],
+                        data_point['date'],
+                        data_point['5_days_sma'],
+                        data_point['20_days_sma'],
+                        data_point['50_days_sma'],
+                        data_point['200_days_sma'],
+                        data_point['5_days_ema'],
+                        data_point['20_days_ema'],
+                        data_point['50_days_ema'],
+                        data_point['200_days_ema'],
+                    ),
+                )
+
+                total_rowcount += 1
+
+            if total_rowcount > 0:
+                print(f"Total rows inserted into MovingAverages table: {total_rowcount}")
+            else:
+                print("No rows were affected. Possible duplicate or failed insert into MovingAverages table.")
+
     except Exception as e:
-        print(f"Error during async_insert_data: {e}")
+        print(f"Error inserting moving averages data into the database: {e}")
+
+async def async_insert_boillinger_bands(connection, boillinger_bands_data):
+    try:
+        async with connection.transaction():
+            total_rowcount = 0
+            for data_point in boillinger_bands_data:
+                query = """
+                    INSERT INTO "BoillingerBands" ("cal_id", "transaction_id", "stock_id", "ticker_symbol", "date",
+                                                  "5_upper_band", "20_upper_band", "50_upper_band", "200_upper_band",
+                                                  "5_lower_band", "20_lower_band", "50_lower_band", "200_lower_band")
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13);
+                """
+                await connection.execute(
+                    query,
+                    *(
+                        data_point['cal_id'],
+                        data_point['transaction_id'],
+                        data_point['stock_id'],
+                        data_point['ticker_symbol'],
+                        data_point['date'],
+                        data_point['5_upper_band'],
+                        data_point['20_upper_band'],
+                        data_point['50_upper_band'],
+                        data_point['200_upper_band'],
+                        data_point['5_lower_band'],
+                        data_point['20_lower_band'],
+                        data_point['50_lower_band'],
+                        data_point['200_lower_band'],
+                    ),
+                )
+
+                total_rowcount += 1
+
+            if total_rowcount > 0:
+                print(f"Total rows inserted into BoillingerBands table: {total_rowcount}")
+            else:
+                print("No rows were affected. Possible duplicate or failed insert into BoillingerBands table.")
+
+    except Exception as e:
+        print(f"Error inserting Boillinger Bands data into the database: {e}")
+
+async def async_insert_relative_indexes(connection, relative_indexes_data):
+    try:
+        async with connection.transaction():
+            total_rowcount = 0 
+            for data_point in relative_indexes_data:
+                query = """
+                    INSERT INTO "RelativeIndexes" ("cal_id", "transaction_id", "stock_id", "ticker_symbol", "date",
+                                                   "14_days_rsi", "20_days_rsi", "50_days_rsi", "200_days_rsi")
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9);
+                """
+                await connection.execute(
+                    query,
+                    *(
+                        data_point['cal_id'],
+                        data_point['transaction_id'],
+                        data_point['stock_id'],
+                        data_point['ticker_symbol'],
+                        data_point['date'],
+                        data_point['14_days_rsi'],
+                        data_point['20_days_rsi'],
+                        data_point['50_days_rsi'],
+                        data_point['200_days_rsi'],
+                    ),
+                )
+                total_rowcount += 1
+
+            if total_rowcount > 0:
+                print(f"Total rows inserted into RelativeIndexes table: {total_rowcount}")
+            else:
+                print("No rows were affected. Possible duplicate or failed insert into RelativeIndexes table.")
+
+    except Exception as e:
+        print(f"Error inserting Relative Indexes data into the database: {e}")
+
+# ---- Async Insert Operations to Stocks and Techincal Tables (if have) ----
+# insert new stock data with both price movements and techincal_data (optional)
+async def async_insert_data(stock_data, technical_data=None):
+    pool, conn = None, None
+    try:
+        # Create a new connection using async_create_connection
+        pool, conn = await async_create_connection()
+
+        # Your existing code to insert data goes here
+        async with conn.transaction():
+            await async_insert_stock_data_table(conn, stock_data)
+
+            # Check if technical_data is not None and insert into respective tables
+            if technical_data:
+                await async_insert_technical_data(conn, technical_data)
+    except Exception as e:
+        print(f"Error during async_insert_data_async: {e}")
+
+    finally:
+        # Release the connection back to the pool in a finally block
+        if pool and conn:
+            await pool.release(conn)
+
+# Extract necessary data and call the respective async insert functions
+async def async_insert_technical_data(conn, technical_data):
+    try:
+        moving_averages_data = technical_data[['cal_id', 'transaction_id', 'stock_id', 'ticker_symbol', 'date',
+                                               '5_days_sma', '20_days_sma', '50_days_sma', '200_days_sma',
+                                               '5_days_ema', '20_days_ema', '50_days_ema', '200_days_ema']].toPandas().to_dict('records')
+
+        boillinger_bands_data = technical_data[['cal_id', 'transaction_id', 'stock_id', 'ticker_symbol', 'date',
+                                                '5_upper_band', '20_upper_band', '50_upper_band', '200_upper_band',
+                                                '5_lower_band', '20_lower_band', '50_lower_band', '200_lower_band']].toPandas().to_dict('records')
+
+        relative_indexes_data = technical_data[['cal_id', 'transaction_id', 'stock_id', 'ticker_symbol', 'date',
+                                                '14_days_rsi', '20_days_rsi', '50_days_rsi', '200_days_rsi']].toPandas().to_dict('records')
+
+        await async_insert_moving_averages(conn, moving_averages_data)
+        await async_insert_boillinger_bands(conn, boillinger_bands_data)
+        await async_insert_relative_indexes(conn, relative_indexes_data)
+
+    except Exception as e:
+        print(f"Error during async_insert_technical_data: {e}")
+
+
 
 
 
@@ -1459,15 +1615,10 @@ async def process_stock_data(spark, ticker_symbol, country, start_date, end_date
                     if not stock_data.data:
                         print("Error: Stock data is empty.")
                     else:
-                        # inserting price movement async 
-                        # print(f'{ticker_symbol} is being inserted to the table')
-                        # stock_price_movements = copy.deepcopy(stock_data)
-                    
-                        # loop = asyncio.get_event_loop()
-                        # loop.create_task(async_insert_data(stock_price_movements))
 
-                        # print(f'Continue while inserting')
-
+                        # to use in async task later for inserting
+                        stock_price_movements = copy.deepcopy(stock_data)
+                        technical_data = None
                         if not technical_requested:
                             # If technical_requested is False, return the fetched stock data
                             filter_data = [entry for entry in stock_data.data if start_date <= entry.date <= end_date]
@@ -1475,6 +1626,7 @@ async def process_stock_data(spark, ticker_symbol, country, start_date, end_date
                             result = stock_data.to_dict()
 
                         else:
+
                             # Process stock data with Spark
                             technical_data, filtered_technical_data = process_stock_data_with_spark(spark, stock_data, start_date, end_date)
 
@@ -1501,6 +1653,14 @@ async def process_stock_data(spark, ticker_symbol, country, start_date, end_date
 
                             else:
                                 print("Error: Unable to process stock data with Spark.")
+                            
+                        # # inserting price movement async 
+                        print(f'{ticker_symbol} is being inserted to the table')
+                    
+                        loop = asyncio.get_event_loop()
+                        loop.create_task(async_insert_data(stock_price_movements, technical_data))
+
+                        print(f'Continue while inserting')
             else:
                 # Company does not exist, you may want to handle this case accordingly
                 print("Company does not exist. Handle this case accordingly.")
