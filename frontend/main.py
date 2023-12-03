@@ -12,57 +12,6 @@ def api_request(url, data, headers):
     except Exception as e:
         return {"error": str(e)}, 500
 
-# Function to display technical analysis chart
-def display_technical_analysis(stock_prices_df, technical_analysis_results, result):
-    # Create an empty DataFrame to store moving averages data
-    result_df = pd.DataFrame()
-
-    # Iterate through technical analysis results
-    for analysis_result in technical_analysis_results:
-        for analysis_type in analysis_result['technical_analysis']:
-            for entry in analysis_type['data']:
-                if analysis_type['type'] == 'moving_averages':
-                    # Exclude 'cal_id' and 'stock_id' from selected columns
-                    columns_to_select = [key for key in entry.keys() if key not in ['cal_id', 'stock_id']]
-
-                    # Use a dictionary comprehension to create a DataFrame with key-value pairs
-                    entry_df = pd.DataFrame({
-                        key: [entry[key]] if key != 'date' else [pd.to_datetime(entry[key])]
-                        for key in columns_to_select
-                    })
-
-                    # Concatenate the entry_df to the result_df
-                    result_df = pd.concat([result_df, entry_df], ignore_index=True)
-
-    # Merge stock prices and moving averages data
-    chart_df = pd.merge(stock_prices_df, result_df, on='date', how='inner')
-
-    # Create a Plotly figure
-    fig = go.Figure()
-
-    # Add stock price line with enhanced attributes
-    fig.add_trace(go.Scatter(x=chart_df['date'], y=chart_df['close_prices'], mode='lines', name='Close Prices',
-                             line=dict(color='red', width=2, dash='solid')))
-
-    # Define colors for each trace
-    colors = {
-        '200_days_sma': 'blue',
-        '50_days_sma': 'green',
-        '200_days_ema': 'orange',
-        '50_days_ema': 'purple'
-    }
-
-    # Add traces with specified colors
-    for column in result_df.columns:
-        if column in colors:
-            fig.add_trace(go.Scatter(x=chart_df['date'], y=chart_df[column], mode='lines', name=column, line=dict(color=colors[column])))
-
-    # Update layout with title and axis labels
-    fig.update_layout(title=f"{result['ticker_symbol']} - Stock Prices and Moving Averages",
-                      xaxis_title='Date', yaxis_title='Price')
-
-    return fig  # Return the combined chart
-
 # Streamlit App
 st.title("Companies Data App")
 
@@ -71,6 +20,16 @@ st.sidebar.header("Input Parameters")
 
 # Country input
 country = "USA"
+
+# Color dictionary
+colors = {
+    '200_sma': 'blue',
+    '50_sma': 'green',
+    '200_ema': 'orange',
+    '50_ema': 'purple',
+    'close': 'red'  
+}
+
 
 # Ticker symbols input with default value
 ticker_symbols = st.sidebar.text_input("Enter Ticker Symbols (comma-separated)", value="AAPL")
@@ -87,65 +46,113 @@ get_technical_analysis_data = st.sidebar.checkbox("Get Technical Analysis Data")
 
 # Button to trigger API request
 if st.sidebar.button("Get Companies Data"):
-    # API request for companies data
-    api_url = "http://localhost:5000/get_companies_data"
     headers = {"Content-Type": "application/json"}
+
+    # API request for companies data
+    api_url = "http://localhost:5000/get_stock_data"
     data = {
-        "country": country,
-        "ticker_symbols": [symbol.strip() for symbol in ticker_symbols.split(",")],
         "start_date": date_range[0].strftime('%Y-%m-%d'),
-        "end_date": date_range[1].strftime('%Y-%m-%d')
+        "end_date": date_range[1].strftime('%Y-%m-%d'),
+        "technical": False,
+        "data": [
+            {
+                "country": country,
+                "ticker_symbol": [symbol.strip() for symbol in ticker_symbols.split(",")][0],
+            }
+        ]
     }
+    
+    if not get_technical_analysis_data:
+        
+        # Make the API request
+        response_data, status_code = api_request(api_url, data, headers)
 
-    # Make the API request
-    response_data, status_code = api_request(api_url, data, headers)
+        # Check if the request was successful (status code 200)
+        if status_code == 200:
+            results = response_data.get("results", [])
+            stock_data = results[0]
 
-    # Check if the request was successful (status code 200)
-    if status_code == 200:
-        results = response_data.get("results", [])
-
-        # Iterate through the results
-        for result in results:
-            expander = st.expander(f"{result['ticker_symbol']}")
-            expander.write(f"Stock id: {result['stock_id']}")
-            expander.write(f"Country: {result['country']}")
-
-            # Fetch stock prices data
-            dates = [pd.to_datetime(entry['date']).strftime('%Y-%m-%d') for entry in result['data']]
-            close_prices = [entry['close'] for entry in result['data']]
+            expander = st.expander(f"{stock_data['ticker_symbol']}")
+            expander.write(f"Stock id: {stock_data['stock_id']}")
+            expander.write(f"Country: {stock_data['country']}")
             
-            # Create DataFrame with 'stock_id', 'ticker_symbol', 'Date', and 'Close Prices' columns
-            stock_prices_df = pd.DataFrame({
-                'stock_id': [result['stock_id']] * len(dates),
-                'ticker_symbol': [result['ticker_symbol']] * len(dates),
-                'date': pd.to_datetime(dates),
-                'close_prices': close_prices
-            })
+            # Iterate through the results
+            for result in results:
 
-            # Fetch technical analysis data if the checkbox is selected
-            if get_technical_analysis_data:
-                # API request for technical analysis
-                technical_analysis_url = "http://localhost:5000/get_technical_analysis"
-                technical_analysis_data = {"data": [{
-                    "stock_id": result["stock_id"],
-                    "ticker_symbol": result["ticker_symbol"]
-                }]}
-
-                # Make the API request
-                technical_analysis_response, _ = api_request(technical_analysis_url, technical_analysis_data, headers)
-
-                # Check if the technical analysis response is not empty
-                if technical_analysis_response:
-                    technical_analysis_results = technical_analysis_response.get("results", [])
-                    combined_chart = display_technical_analysis(stock_prices_df, technical_analysis_results, result)
-                    expander.plotly_chart(combined_chart, use_container_width=True, height=400)
-
-            else:
-                # Display stock prices chart for the entire dataset
+                # Fetch stock prices data
+                dates = [pd.to_datetime(entry['date']).strftime('%Y-%m-%d') for entry in result['data']]
+                close_prices = [entry['close'] for entry in result['data']]
+                
+                # Create DataFrame with 'stock_id', 'ticker_symbol', 'Date', and 'Close Prices' columns
+                stock_prices_df = pd.DataFrame({
+                    'date': pd.to_datetime(dates),
+                    'close_prices': close_prices
+                })
+                # Create a Plotly figure
                 fig = go.Figure()
-                fig.add_trace(go.Scatter(x=stock_prices_df['date'], y=stock_prices_df['close_prices'], mode='lines', name='Close Prices'))
-                fig.update_layout(title=f"{result['ticker_symbol']} - Stock Prices",
-                                xaxis_title='Date', yaxis_title='Price')
-                expander.plotly_chart(fig, use_container_width=True, height=400)
 
-                expander.write("-" * 50)
+                # Add a scatter plot for close prices
+                fig.add_trace(go.Scatter(x=stock_prices_df['date'], y=stock_prices_df['close_prices'], mode='lines', name='Close Prices'))
+
+                # Update layout with title and axis labels
+                fig.update_layout(title=f"Stock Prices",
+                                xaxis_title='Date', yaxis_title='Close Prices')
+
+                # Use plotly_chart to display the chart in the Streamlit app
+                expander.plotly_chart(fig, use_container_width=True, height=400)
+        else:
+            print(response_data)
+    # Fetch technical analysis data if the checkbox is selected
+    else:
+        # API request for technical analysis
+        data['technical'] = True
+
+        # Make the API request
+        technical_analysis_response, status_code = api_request(api_url, data, headers)
+
+        # Check if the technical analysis response is not empty
+        if status_code == 200:
+            results = technical_analysis_response.get("results", [])
+            stock_data = results[0]
+
+            expander = st.expander(f"{stock_data['ticker_symbol']}")
+            expander.write(f"Stock id: {stock_data['stock_id']}")
+            expander.write(f"Country: {stock_data['country']}")
+
+            if stock_data['technical_view']:
+                # Extract relevant columns from each entry in "technical_view"
+                data_list = []
+                for entry in stock_data['technical_view']:
+                    data_list.append({
+                        "date": pd.to_datetime(entry["date"]),
+                        "close": entry["close"],
+                        "50_sma": entry["ma_50_days_sma"],
+                        "200_sma": entry["ma_200_days_sma"],
+                        "50_ema": entry["ma_50_days_ema"],
+                        "200_ema": entry["ma_200_days_ema"]
+                    })
+                
+                # Create DataFrame from the list of dictionaries
+                df = pd.DataFrame(data_list)
+
+                # Display the resulting DataFrame
+                print(df)
+                # Create a Plotly figure
+                fig = go.Figure()
+
+                # Add traces with specified colors
+                for column in df.columns[1:]:  # Exclude 'date' column
+                    if column in colors:
+                        fig.add_trace(go.Scatter(x=df['date'], y=df[column], mode='lines', name=column, line=dict(color=colors[column])))
+
+                # Update layout with title and axis labels
+                fig.update_layout(title="Stock Prices and Moving Averages",
+                                xaxis_title='Date', yaxis_title='Price')
+
+                # Display the chart using plotly_chart
+                expander.plotly_chart(fig, use_container_width=True)
+            else:
+                print("Dont have data in view")
+        else: 
+            print(technical_analysis_response)
+
