@@ -1180,7 +1180,7 @@ async def async_get_stock_technical_data_from_tables(connection, stock_id, start
         # Add condition to filter by stock_id
         query += 'AND S."stock_id" = $3 '
 
-        query += 'ORDER BY S."date" ASC LIMIT 10;'
+        query += 'ORDER BY S."date" ASC;'
 
         # Execute the query with parameters
         if start_date is not None and end_date is not None:
@@ -1188,8 +1188,6 @@ async def async_get_stock_technical_data_from_tables(connection, stock_id, start
         else:
             result = await connection.fetch(query, stock_id)
 
-        # Fetch all rows as a list of dictionaries
-        columns = [desc[0] for desc in result.description]
         data = [dict(row) for row in result]
 
         return data
@@ -1403,14 +1401,14 @@ async def async_insert_moving_averages(connection, moving_averages_data):
                         data_point['stock_id'],
                         data_point['ticker_symbol'],
                         data_point['date'],
-                        data_point['5_days_sma'],
-                        data_point['20_days_sma'],
-                        data_point['50_days_sma'],
-                        data_point['200_days_sma'],
-                        data_point['5_days_ema'],
-                        data_point['20_days_ema'],
-                        data_point['50_days_ema'],
-                        data_point['200_days_ema'],
+                        data_point['ma_5_days_sma'],
+                        data_point['ma_20_days_sma'],
+                        data_point['ma_50_days_sma'],
+                        data_point['ma_200_days_sma'],
+                        data_point['ma_5_days_ema'],
+                        data_point['ma_20_days_ema'],
+                        data_point['ma_50_days_ema'],
+                        data_point['ma_200_days_ema'],
                     ),
                 )
 
@@ -1443,14 +1441,14 @@ async def async_insert_boillinger_bands(connection, boillinger_bands_data):
                         data_point['stock_id'],
                         data_point['ticker_symbol'],
                         data_point['date'],
-                        data_point['5_upper_band'],
-                        data_point['20_upper_band'],
-                        data_point['50_upper_band'],
-                        data_point['200_upper_band'],
-                        data_point['5_lower_band'],
-                        data_point['20_lower_band'],
-                        data_point['50_lower_band'],
-                        data_point['200_lower_band'],
+                        data_point['bb_5_upper_band'],
+                        data_point['bb_20_upper_band'],
+                        data_point['bb_50_upper_band'],
+                        data_point['bb_200_upper_band'],
+                        data_point['bb_5_lower_band'],
+                        data_point['bb_20_lower_band'],
+                        data_point['bb_50_lower_band'],
+                        data_point['bb_200_lower_band'],
                     ),
                 )
 
@@ -1525,12 +1523,12 @@ async def async_insert_data(stock_data, technical_data=None):
 async def async_insert_technical_data(conn, technical_data):
     try:
         moving_averages_data = technical_data[['cal_id', 'transaction_id', 'stock_id', 'ticker_symbol', 'date',
-                                               '5_days_sma', '20_days_sma', '50_days_sma', '200_days_sma',
-                                               '5_days_ema', '20_days_ema', '50_days_ema', '200_days_ema']].toPandas().to_dict('records')
+                                               'ma_5_days_sma', 'ma_20_days_sma', 'ma_50_days_sma', 'ma_200_days_sma',
+                                               'ma_5_days_ema', 'ma_20_days_ema', 'ma_50_days_ema', 'ma_200_days_ema']].toPandas().to_dict('records')
 
         boillinger_bands_data = technical_data[['cal_id', 'transaction_id', 'stock_id', 'ticker_symbol', 'date',
-                                                '5_upper_band', '20_upper_band', '50_upper_band', '200_upper_band',
-                                                '5_lower_band', '20_lower_band', '50_lower_band', '200_lower_band']].toPandas().to_dict('records')
+                                                'bb_5_upper_band', 'bb_20_upper_band', 'bb_50_upper_band', 'bb_200_upper_band',
+                                                'bb_5_lower_band', 'bb_20_lower_band', 'bb_50_lower_band', 'bb_200_lower_band']].toPandas().to_dict('records')
 
         relative_indexes_data = technical_data[['cal_id', 'transaction_id', 'stock_id', 'ticker_symbol', 'date',
                                                 '14_days_rsi', '20_days_rsi', '50_days_rsi', '200_days_rsi']].toPandas().to_dict('records')
@@ -1542,7 +1540,26 @@ async def async_insert_technical_data(conn, technical_data):
     except Exception as e:
         print(f"Error during async_insert_technical_data: {e}")
 
+async def async_view_exists(connection, view_name):
+    """
+    Check if a view exists in the database.
 
+    Parameters:
+    - connection: Database connection object
+    - view_name: Name of the view to check
+
+    Returns:
+    - True if the view exists, False otherwise
+    """
+    try:
+        # Use the async_check_view_exists function to check if the view exists
+        query = f"SELECT EXISTS (SELECT 1 FROM information_schema.views WHERE table_name = '{view_name}')"
+        result = await connection.fetchval(query)
+        
+        return result
+    except (Exception, psycopg2.DatabaseError) as error:
+        print(f"Error checking view existence: {error}")
+        return False
 
 
 
@@ -1574,34 +1591,43 @@ async def process_stock_data(spark, ticker_symbol, country, start_date, end_date
                             "data": data_exists
                         }
                     else:
-                        # Try to get technical data from a view
-                        technical_data_from_view = await async_get_stock_technical_data_from_view(connection, stock_id, start_date, end_date)
+                        # Check if the view exists before attempting to retrieve data from it
+                        view_name = f"stock_technical_view"  
 
-                        if technical_data_from_view:
-                            # If data is found in the view, use it
-                            technical_data = technical_data_from_view
-
-                            # Print the DataFrame
-                            print(f'{ticker_symbol} has Technical Data from View')
-                            
-                            result = {
-                                "stock_id": stock_id, 
-                                "ticker_symbol": ticker_symbol, 
-                                "country": country, 
-                                "technical_view": technical_data
-                            }
-                        else:
+                        if not await async_view_exists(connection, view_name):
                             # If data is not found in the view, try to get it from tables
                             technical_data_from_tables = await async_get_stock_technical_data_from_tables(connection, stock_id, start_date, end_date)
 
                             if technical_data_from_tables:
+                                print(f'{ticker_symbol} has techincal data from joining tables')
+                                
                                 # If data is found in tables, use it
-                                result = technical_data_from_tables
+                                result = {"stock_id": stock_id, "ticker_symbol": ticker_symbol, "country": country, "technical": technical_data_from_tables}
                             else:
                                 # drop that stock in tables and recalculate everything again for that stock only
                                 # If no data is found in both view and tables, print a message
                                 print("Will implement data processing function!!!!!!!")
                                 # result = perform_data_processing(ticker_symbol, country, start_date, end_date, stock_id)
+                        else:
+                            # Try to get technical data from a view
+                            technical_data_from_view = await async_get_stock_technical_data_from_view(connection, stock_id, start_date, end_date)
+
+                            if technical_data_from_view:
+                                # If data is found in the view, use it
+                                technical_data = technical_data_from_view
+
+                                # Print the DataFrame
+                                print(f'{ticker_symbol} has Technical Data from View')
+                                
+                                result = {
+                                    "stock_id": stock_id, 
+                                    "ticker_symbol": ticker_symbol, 
+                                    "country": country, 
+                                    "technical": technical_data
+                                }
+                            else:
+                                # Handle the case where the view is empty or data retrieval fails
+                                print(f"No data found in the view {view_name}.")     
                 else:
                     # Stock data does not exist in the database
                     print(f"No stock data found for {ticker_symbol} with stock_id {stock_id} in the database. Need to fetch data.")
@@ -1633,7 +1659,6 @@ async def process_stock_data(spark, ticker_symbol, country, start_date, end_date
                             if filtered_technical_data:
                                 # Display unfiltered technical data
                                 print("Filtered Technical Data:")
-                                filtered_technical_data.show()
 
                                 # Extract the columns you need
                                 stock_id = filtered_technical_data.select("stock_id").first()[0]
@@ -1644,17 +1669,17 @@ async def process_stock_data(spark, ticker_symbol, country, start_date, end_date
 
                                 # Remove the columns from the DataFrame
                                 filtered_technical_data = filtered_technical_data.drop(*exclude_columns)
-
+                                filtered_technical_data.show()
                                 # Convert DataFrame to list of dictionaries
                                 technical_data_list = filtered_technical_data.toPandas().to_dict('records')
-
+                            
                                 # Create the final dictionary
-                                result = {"stock_id": stock_id, "ticker_symbol": ticker_symbol, "technical": technical_data_list}
+                                result = {"stock_id": stock_id, "ticker_symbol": ticker_symbol, "country": country, "technical": technical_data_list}
 
                             else:
                                 print("Error: Unable to process stock data with Spark.")
                             
-                        # # inserting price movement async 
+                        # inserting price movement async 
                         print(f'{ticker_symbol} is being inserted to the table')
                     
                         loop = asyncio.get_event_loop()

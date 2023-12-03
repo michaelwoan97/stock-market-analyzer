@@ -96,14 +96,14 @@ def calculate_moving_averages(cleaned_stock_data, periods):
 
         # Calculate simple moving averages
         for p in periods:
-            cleaned_stock_data = cleaned_stock_data.withColumn(f"{p}_days_sma", F.round(F.avg("close").over(windows[periods.index(p)]), 2))
+            cleaned_stock_data = cleaned_stock_data.withColumn(f"ma_{p}_days_sma", F.round(F.avg("close").over(windows[periods.index(p)]), 2))
 
         # Calculate exponential moving averages using UDF
         for p, alpha in zip(periods, alpha_values):
-            cleaned_stock_data = cleaned_stock_data.withColumn(f"{p}_days_ema", F.round(calculate_ema_udf(F.collect_list("close").over(windows[periods.index(p)]), F.lit(alpha)), round_to_decimal))
+            cleaned_stock_data = cleaned_stock_data.withColumn(f"ma_{p}_days_ema", F.round(calculate_ema_udf(F.collect_list("close").over(windows[periods.index(p)]), F.lit(alpha)), round_to_decimal))
 
         # Show the result
-        moving_averages_data = cleaned_stock_data.select(['cal_id', 'transaction_id', "stock_id", "ticker_symbol", 'date', 'close'] + [f"{p}_days_sma" for p in periods] + [f"{p}_days_ema" for p in periods]).orderBy(F.desc("date"))
+        moving_averages_data = cleaned_stock_data.select(['cal_id', 'transaction_id', "stock_id", "ticker_symbol", 'date', 'close'] + [f"ma_{p}_days_sma" for p in periods] + [f"ma_{p}_days_ema" for p in periods]).orderBy(F.desc("date"))
         # moving_averages_data.show()
 
         return moving_averages_data
@@ -120,11 +120,11 @@ def calculate_bollinger_bands(cleaned_stock_data, bollinger_periods):
         windows = [Window().partitionBy(partition_cols).orderBy(F.desc("date")).rowsBetween(0, p - 1) for p in bollinger_periods]
 
         for p in bollinger_periods:
-            upper_band_col = col(f"{p}_days_ema") + (2 * F.stddev("close").over(windows[bollinger_periods.index(p)]))
-            lower_band_col = col(f"{p}_days_ema") - (2 * F.stddev("close").over(windows[bollinger_periods.index(p)]))
+            upper_band_col = col(f"ma_{p}_days_ema") + (2 * F.stddev("close").over(windows[bollinger_periods.index(p)]))
+            lower_band_col = col(f"ma_{p}_days_ema") - (2 * F.stddev("close").over(windows[bollinger_periods.index(p)]))
 
-            cleaned_stock_data = cleaned_stock_data.withColumn(f"{p}_upper_band", F.round(upper_band_col, round_to_decimal))
-            cleaned_stock_data = cleaned_stock_data.withColumn(f"{p}_lower_band", F.round(lower_band_col, round_to_decimal))
+            cleaned_stock_data = cleaned_stock_data.withColumn(f"bb_{p}_upper_band", F.round(upper_band_col, round_to_decimal))
+            cleaned_stock_data = cleaned_stock_data.withColumn(f"bb_{p}_lower_band", F.round(lower_band_col, round_to_decimal))
 
         # cleaned_stock_data.show()
         return cleaned_stock_data
@@ -209,7 +209,7 @@ def display_stock_data(spark, stock_data):
         print(f"Error: {e}")
 
 
-def process_stock_data_with_spark(spark, stock_data, start_date, end_date):
+def process_stock_data_with_spark(spark, stock_data, start_date=None, end_date=None):
     try:
         cleaned_data = clean_stock_data(spark, stock_data)
         moving_averages_data = calculate_moving_averages(cleaned_data, ma_periods)
@@ -217,10 +217,14 @@ def process_stock_data_with_spark(spark, stock_data, start_date, end_date):
         rsi_data = calculate_relative_strength_index(bollinger_bands_data, rsi_periods)
 
         if rsi_data:
-            
-            # Filter the data based on the specified date range
-            filtered_rsi_data = rsi_data.filter((F.col("date") >= start_date) & (F.col("date") <= end_date))
-            return rsi_data, filtered_rsi_data
+            # Check if start_date and end_date are provided
+            if start_date is not None and end_date is not None:
+                # Filter the data based on the specified date range
+                filtered_rsi_data = rsi_data.filter((F.col("date") >= start_date) & (F.col("date") <= end_date))
+                return rsi_data, filtered_rsi_data
+            else:
+                # If start_date or end_date is None, return the original data without filtering
+                return rsi_data, rsi_data
         else:
             print("Error: Unable to process data.")
             return None, None
