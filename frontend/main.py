@@ -258,12 +258,10 @@ if st.sidebar.button("Get Stock Data"):
                         f"**Stock ID:** {stock_data['stock_id']}  \n"
                         f"**Country:** {stock_data['country']}", unsafe_allow_html=True)
 
-            # Iterate through the results
-            for result in results:
-
-                # Fetch stock prices data
-                dates = [pd.to_datetime(entry['date']).strftime('%Y-%m-%d') for entry in result['data']]
-                close_prices = [entry['close'] for entry in result['data']]
+            # Fetch stock prices data
+            if 'data' in stock_data:
+                dates = [pd.to_datetime(entry['date']).strftime('%Y-%m-%d') for entry in stock_data['data']]
+                close_prices = [entry['close'] for entry in stock_data['data']]
 
                 # Create DataFrame with 'stock_id', 'ticker_symbol', 'Date', and 'Close Prices' columns
                 stock_prices_df = pd.DataFrame({
@@ -273,9 +271,11 @@ if st.sidebar.button("Get Stock Data"):
 
                 # Draw stock prices chart
                 draw_stock_prices_chart(stock_prices_df)
-
+            else:
+                st.warning(f"No stock data for {stock_data['ticker_symbol']}!!!")
         else:
-            print("No results")
+            st.warning("No results")
+
     # Fetch technical analysis data if the checkbox is selected
     else:
         # API request for technical analysis
@@ -315,7 +315,24 @@ if st.sidebar.button("Get Stock Data"):
                 # Draw technical analysis charts
                 draw_technical_analysis_charts(df)
             else:
-                print("NO DATA FROM RESPONSE OR SOMETHING WRONG!!!!")
+                st.warning("Techincal Analysis Data is not available.")
+                stock_data = results[0]
+
+                # Fetch stock prices data
+                if 'data' in stock_data:
+                    dates = [pd.to_datetime(entry['date']).strftime('%Y-%m-%d') for entry in stock_data['data']]
+                    close_prices = [entry['close'] for entry in stock_data['data']]
+
+                    # Create DataFrame with 'stock_id', 'ticker_symbol', 'Date', and 'Close Prices' columns
+                    stock_prices_df = pd.DataFrame({
+                        'date': pd.to_datetime(dates),
+                        'close_prices': close_prices
+                    })
+
+                    # Draw stock prices chart
+                    draw_stock_prices_chart(stock_prices_df)
+                else:
+                    st.warning(f"No stock data for {stock_data['ticker_symbol']}!!!")
             
         else:
-            print("No results")
+            st.warning("No results")

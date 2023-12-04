@@ -1604,10 +1604,14 @@ async def process_stock_data(spark, ticker_symbol, country, start_date, end_date
                                 # If data is found in tables, use it
                                 result = {"stock_id": stock_id, "ticker_symbol": ticker_symbol, "country": country, "technical": technical_data_from_tables}
                             else:
-                                # drop that stock in tables and recalculate everything again for that stock only
-                                # If no data is found in both view and tables, print a message
-                                print("Will implement data processing function!!!!!!!")
-                                # result = perform_data_processing(ticker_symbol, country, start_date, end_date, stock_id)
+                                print(f'Techincal data is not available for {ticker_symbol} from Calcualtion tables!')
+                            
+                                result = {
+                                    "stock_id": stock_id, 
+                                    "ticker_symbol": ticker_symbol, 
+                                    "country": country, 
+                                    "data": data_exists
+                                }
                         else:
                             # Try to get technical data from a view
                             technical_data_from_view = await async_get_stock_technical_data_from_view(connection, stock_id, start_date, end_date)
@@ -1627,7 +1631,24 @@ async def process_stock_data(spark, ticker_symbol, country, start_date, end_date
                                 }
                             else:
                                 # Handle the case where the view is empty or data retrieval fails
-                                print(f"No data found in the view {view_name}.")     
+                                print(f"No data found in the view {view_name}.")
+
+                                # If data is not found in the view, try to get it from tables
+                                technical_data_from_tables = await async_get_stock_technical_data_from_tables(connection, stock_id, start_date, end_date)
+
+                                if technical_data_from_tables:
+                                    print(f'{ticker_symbol} has techincal data from joining tables')
+                                    
+                                    # If data is found in tables, use it
+                                    result = {"stock_id": stock_id, "ticker_symbol": ticker_symbol, "country": country, "technical": technical_data_from_tables}
+                                else:
+                                    print(f'Techincal data is not available for {ticker_symbol} from Calcualtion tables!')
+                                    result = {
+                                        "stock_id": stock_id, 
+                                        "ticker_symbol": ticker_symbol, 
+                                        "country": country, 
+                                        "data": data_exists
+                                    }     
                 else:
                     # Stock data does not exist in the database
                     print(f"No stock data found for {ticker_symbol} with stock_id {stock_id} in the database. Need to fetch data.")
@@ -1645,6 +1666,7 @@ async def process_stock_data(spark, ticker_symbol, country, start_date, end_date
                         # to use in async task later for inserting
                         stock_price_movements = copy.deepcopy(stock_data)
                         technical_data = None
+                        
                         if not technical_requested:
                             # If technical_requested is False, return the fetched stock data
                             filter_data = [entry for entry in stock_data.data if start_date <= entry.date <= end_date]
@@ -1678,12 +1700,19 @@ async def process_stock_data(spark, ticker_symbol, country, start_date, end_date
 
                             else:
                                 print("Error: Unable to process stock data with Spark.")
+                                
+                                filter_data = [entry for entry in stock_data.data if start_date <= entry.date <= end_date]
+                                stock_data.data = filter_data
+                                result = stock_data.to_dict()   
                             
                         # inserting price movement async 
                         print(f'{ticker_symbol} is being inserted to the table')
                     
                         loop = asyncio.get_event_loop()
-                        loop.create_task(async_insert_data(stock_price_movements, technical_data))
+                        if technical_data:
+                            loop.create_task(async_insert_data(stock_price_movements, technical_data))
+                        else:
+                            loop.create_task(async_insert_data(stock_price_movements))
 
                         print(f'Continue while inserting')
             else:
