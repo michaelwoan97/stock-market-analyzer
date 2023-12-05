@@ -252,7 +252,7 @@ if st.sidebar.button("Get Stock Data"):
 
         if results:
             stock_data = results[0]
-
+            
             # Display general information with styles
             st.markdown(f"### Ticker Symbol: {stock_data['ticker_symbol']}  \n"
                         f"**Stock ID:** {stock_data['stock_id']}  \n"
@@ -286,7 +286,7 @@ if st.sidebar.button("Get Stock Data"):
 
         if results:
             stock_data = results[0]
-
+            
             # Display general information with styles
             st.markdown(f"### Ticker Symbol: {stock_data['ticker_symbol']}  \n"
                         f"**Stock ID:** {stock_data['stock_id']}  \n"

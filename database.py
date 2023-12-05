@@ -66,7 +66,7 @@ class StockData:
             'country': self.country,
             'data': [price_movement.to_dict() for price_movement in self.data]
         }
-
+    
 # Function to create a database connection with error handling
 def create_connection():
     try:
@@ -86,29 +86,32 @@ def execute_sql(connection, sql_statements):
     except Exception as e:
         print(f"Error: Unable to execute SQL statements. {e}")
 
-def get_stocks_ticker_id_exist():
-    connection = create_connection()
-    cursor = connection.cursor()
+async def async_get_stocks_ticker_id_exist(pool):
+    connection = None
+
     try:
+        # Acquire a connection from the pool
+        connection = await pool.acquire()
+
         query = "SELECT DISTINCT stock_id, ticker_symbol FROM \"Stocks\""
-        cursor.execute(query)
+        results = await connection.fetch(query)
 
-        stocks_info = []
-        results = cursor.fetchall()
+        # Fetch the results using fetchall
+        stocks_info = [
+            {'stock_id': stock_id, 'ticker_symbol': ticker_symbol}
+            for stock_id, ticker_symbol in results
+        ]
 
-        for result in results:
-            stock_id, ticker_symbol = result
-            stock={
-                'stock_id': stock_id,
-                'ticker_symbol': ticker_symbol
-            }
-            stocks_info.append(stock)
-        
         return stocks_info
+
     except Exception as e:
-        print(f"Error geting stock ticker & its id from the database: {e}")
+        print(f"Error getting stock ticker & its id from the database: {e}")
+
     finally:
-        cursor.close()
+        # Release the connection back to the pool
+        if connection:
+            await pool.release(connection)
+
 
 # Function to fetch stock data from the database
 def fetch_stock_data_history_from_db(connection, stock_id, ticker_symbol):
@@ -141,7 +144,7 @@ def insert_stock_data_into_db(connection, stock_data):
                 INSERT INTO "Stocks" ("transaction_id", "stock_id", "ticker_symbol", "date", "low", "open", "high", "volume", "close")
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
             """
-            cursor.execute(query, (data_point.transaction_id, stock_data.stock_id, stock_data.ticker_symbol, data_point.date, data_point.low, data_point.open_price, data_point.high, data_point.volume, data_point.close))
+            cursor.execute(query, (str(data_point.transaction_id[0]), stock_data.stock_id, stock_data.ticker_symbol, data_point.date, data_point.low, data_point.open_price, data_point.high, data_point.volume, data_point.close))
             
             # Add the rowcount of the current execute to the total rowcount
             total_rowcount += cursor.rowcount
@@ -228,41 +231,22 @@ def filter_stock_data_by_date_range(stock_data_history, start_date, end_date):
         return None
 
 
-def update_stock_data_daily(stockTickerIds):
+def update_stock_data_daily(pool, stockTickerId, periods=1):
+    stock_id = stockTickerId['stock_id']
+    ticker_symbol = stockTickerId['ticker_symbol']
 
-    combined_data = []
+    # Create a Ticker object for the stock
+    stock = yfinance.Ticker(ticker_symbol)
 
-    for stock in stockTickerIds:
-        stock_id = stock['stock_id']
-        ticker_symbol = stock['ticker_symbol']
+    arr_stock_data = []
 
-        # Create a Ticker object for the stock
-        stock = yfinance.Ticker(ticker_symbol)
+    # Loop through the specified number of days
+    for day in range(periods):
+        # Get historical data for the stock for the current day
+        hist_data = stock.history(period="1d")
 
-        # Get daily historical data for the stock
-        hist_data = stock.history(period="1d")  # Daily data for the past 1 day
-        
         # Check if data is available before formatting
         if not hist_data.empty:
-            # formatted_data = {
-            #     'stock_id': stock_id,
-            #     'ticker_symbol': ticker_symbol,
-            #     'data':[]
-            # }
-
-            # for data in hist_data:
-            #     print(data)
-            #     # daily_data = {
-            #     #     # 'date': data.index[-1].strftime('%Y-%m-%d'),  # Get the date of the latest data point
-            #     #     'low': float(data['Low'].iloc[-1]),  # Get the latest low price
-            #     #     'open': float(data['Open'].iloc[-1]),  # Get the latest open price
-            #     #     'volume': int(data['Volume'].iloc[-1]),  # Get the latest volume
-            #     #     'high': float(data['High'].iloc[-1]),  # Get the latest high price
-            #     #     'close': float(data['Close'].iloc[-1]),  # Get the latest closing price
-            #     # }
-            #     formatted_data['data'].append(data)
-            
-            arr_stock_data = []
             stock_data = {
                 'date': pd.to_datetime(hist_data.index[-1]).strftime('%Y-%m-%d'),  # Get the date of the latest data point
                 'low': float(hist_data['Low'].iloc[-1]),  # Get the latest low price
@@ -272,13 +256,12 @@ def update_stock_data_daily(stockTickerIds):
                 'close': float(hist_data['Close'].iloc[-1]),  # Get the latest closing price
             }
             arr_stock_data.append(stock_data)
-            stock = StockData(stock_id, ticker_symbol, None, data=arr_stock_data)
-
-            combined_data.append(stock)
         else:
-            print(f"Failed to fetch data for symbol {stock}! No daily trading data available for today.")
+            print(f"Failed to fetch data for symbol {stock} on {day + 1} day! No daily trading data available for today.")
 
-    return combined_data
+    stock = StockData(stock_id, ticker_symbol, None, data=arr_stock_data)
+    print(stock)
+    return stock
 
 def save_stock_data_to_csv(stock_data, ticker_symbol, output_dir):
     # Convert the stock data to a Pandas DataFrame
@@ -1025,10 +1008,10 @@ async def async_stock_data_exists(connection, stock_id, ticker_symbol, start_dat
         # Convert optional date range conditions to date objects
         if start_date is not None:
             start_date = datetime.strptime(start_date, "%Y-%m-%d").date()
-            query += 'AND "date" >= $3 '
+            query += ' AND "date" >= $3 '
         if end_date is not None:
             end_date = datetime.strptime(end_date, "%Y-%m-%d").date()
-            query += 'AND "date" <= $4 '
+            query += ' AND "date" <= $4 '
 
         # Execute the query with parameters
         if start_date is not None and end_date is not None:
@@ -1584,6 +1567,8 @@ async def process_stock_data(spark, ticker_symbol, country, start_date, end_date
                     # Data exists
                     if not technical_requested:
                         # If technical_requested is False, return the stock data
+                        df = pd.DataFrame(data_exists)
+                        print(df)
                         result = {
                             "stock_id": stock_id, 
                             "ticker_symbol": ticker_symbol, 
@@ -1722,6 +1707,7 @@ async def process_stock_data(spark, ticker_symbol, country, start_date, end_date
         finally:
             # Release the connection back to the pool
             await pool.release(connection)
+            await pool.close()
         return result
 
     except (Exception, psycopg2.DatabaseError) as error:
