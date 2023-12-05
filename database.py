@@ -10,7 +10,8 @@ from matplotlib import ticker
 import pandas as pd
 import psycopg2
 import yfinance
-from psycopg2 import sql 
+import contextlib
+from psycopg2 import sql, pool 
 from finance import fetch_stock_data_from_url, PriceMovement
 from dotenv import load_dotenv
 
@@ -66,7 +67,33 @@ class StockData:
             'country': self.country,
             'data': [price_movement.to_dict() for price_movement in self.data]
         }
+
+# Function to create a connection pool
+def create_connection_pool(minconn, maxconn):
+    try:
+        return pool.SimpleConnectionPool(
+            minconn=minconn,
+            maxconn=maxconn,
+            **db_params
+        )
+    except psycopg2.OperationalError as e:
+        print(f"Error creating the connection pool: {e}")
+        raise e
+
+# Function to get a connection from the pool
+def get_connection_from_pool(db_pool):
+    try:
+        connection = db_pool.getconn()
+        return connection
+    except psycopg2.OperationalError as e:
+        print(f"Error getting a connection from the pool: {e}")
+        raise e
     
+# Function to release a connection back to the pool
+def release_connection(db_pool, connection):
+    db_pool.putconn(connection)
+
+
 # Function to create a database connection with error handling
 def create_connection():
     try:
@@ -86,15 +113,17 @@ def execute_sql(connection, sql_statements):
     except Exception as e:
         print(f"Error: Unable to execute SQL statements. {e}")
 
-async def async_get_stocks_ticker_id_exist(pool):
+def get_stocks_ticker_id_exist(pool):
     connection = None
 
     try:
         # Acquire a connection from the pool
-        connection = await pool.acquire()
+        connection = pool.getconn()
 
         query = "SELECT DISTINCT stock_id, ticker_symbol FROM \"Stocks\""
-        results = await connection.fetch(query)
+        with connection.cursor() as cursor:
+            cursor.execute(query)
+            results = cursor.fetchall()
 
         # Fetch the results using fetchall
         stocks_info = [
@@ -110,7 +139,7 @@ async def async_get_stocks_ticker_id_exist(pool):
     finally:
         # Release the connection back to the pool
         if connection:
-            await pool.release(connection)
+            pool.putconn(connection)
 
 
 # Function to fetch stock data from the database
@@ -1714,3 +1743,30 @@ async def process_stock_data(spark, ticker_symbol, country, start_date, end_date
         # Handle database errors
         print(f"Database error: {error}")
         return None
+    
+
+# async def async_get_stocks_ticker_id_exist(pool):
+#     connection = None
+
+#     try:
+#         # Acquire a connection from the pool
+#         connection = await pool.acquire()
+
+#         query = "SELECT DISTINCT stock_id, ticker_symbol FROM \"Stocks\""
+#         results = await connection.fetch(query)
+
+#         # Fetch the results using fetchall
+#         stocks_info = [
+#             {'stock_id': stock_id, 'ticker_symbol': ticker_symbol}
+#             for stock_id, ticker_symbol in results
+#         ]
+
+#         return stocks_info
+
+#     except Exception as e:
+#         print(f"Error getting stock ticker & its id from the database: {e}")
+
+#     finally:
+#         # Release the connection back to the pool
+#         if connection:
+#             await pool.release(connection)

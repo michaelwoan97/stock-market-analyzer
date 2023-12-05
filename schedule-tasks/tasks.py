@@ -2,7 +2,7 @@ import sys
 sys.path.append('../')
 
 from celery import Celery
-from database import async_get_stocks_ticker_id_exist, async_create_connection_pool
+from database import create_connection_pool, get_stocks_ticker_id_exist
 from celery.schedules import crontab
 
 broker_url = 'pyamqp://guest@localhost//'
@@ -16,7 +16,28 @@ app.conf.timezone = 'UTC'
 app.conf.result_serializer = 'json'
 
 @app.task
-async def task_update_stock_data_daily():
+def task_update_stock_data_daily():
+    db_pool = None
+    minconn = 5
+    maxconn = 10
+    try:
+        # Create a connection pool
+        db_pool = create_connection_pool(minconn, maxconn)
+
+        # Get stocks' ticker and id from the database
+        stocks_info = get_stocks_ticker_id_exist(db_pool)
+
+        # Print or use the results
+        print(stocks_info)
+
+    except Exception as e:
+        print(f"Error: {e}")
+
+    finally:
+        # Close the connection pool
+        if db_pool:
+            db_pool.closeall()
+
     # create connection pool
     # get stock ids
     # create tasks with pool, and each stock in the array to update
