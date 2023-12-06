@@ -9,8 +9,8 @@ app = Celery('my_stock_project', broker='pyamqp://guest@localhost//', backend='r
 app.conf.beat_schedule = {
     'task_update_stock_data_daily': {
         'task': 'tasks.task_update_stock_data_daily',  # Path to your Celery task
-        'schedule': timedelta(seconds=5),  # Run every 20 seconds
-        # 'schedule': crontab(minute=15, hour=16, day_of_week='1-5'),  # 4:15 PM, Mon-Fri
+        # 'schedule': timedelta(seconds=20),  # Run every 20 seconds
+        'schedule': crontab(minute=15, hour=16, day_of_week='1-5'),  # 4:15 PM, Mon-Fri
     },
 }
 

@@ -11,6 +11,8 @@ import pandas as pd
 import psycopg2
 import yfinance
 import contextlib
+import concurrent.futures
+
 from psycopg2 import sql, pool 
 from finance import fetch_stock_data_from_url, PriceMovement
 from dotenv import load_dotenv
@@ -113,34 +115,6 @@ def execute_sql(connection, sql_statements):
     except Exception as e:
         print(f"Error: Unable to execute SQL statements. {e}")
 
-def get_stocks_ticker_id_exist(pool):
-    connection = None
-
-    try:
-        # Acquire a connection from the pool
-        connection = pool.getconn()
-
-        query = "SELECT DISTINCT stock_id, ticker_symbol FROM \"Stocks\""
-        with connection.cursor() as cursor:
-            cursor.execute(query)
-            results = cursor.fetchall()
-
-        # Fetch the results using fetchall
-        stocks_info = [
-            {'stock_id': stock_id, 'ticker_symbol': ticker_symbol}
-            for stock_id, ticker_symbol in results
-        ]
-
-        return stocks_info
-
-    except Exception as e:
-        print(f"Error getting stock ticker & its id from the database: {e}")
-
-    finally:
-        # Release the connection back to the pool
-        if connection:
-            pool.putconn(connection)
-
 
 # Function to fetch stock data from the database
 def fetch_stock_data_history_from_db(connection, stock_id, ticker_symbol):
@@ -173,17 +147,17 @@ def insert_stock_data_into_db(connection, stock_data):
                 INSERT INTO "Stocks" ("transaction_id", "stock_id", "ticker_symbol", "date", "low", "open", "high", "volume", "close")
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
             """
-            cursor.execute(query, (str(data_point.transaction_id[0]), stock_data.stock_id, stock_data.ticker_symbol, data_point.date, data_point.low, data_point.open_price, data_point.high, data_point.volume, data_point.close))
+            cursor.execute(query, (str(data_point.transaction_id), stock_data.stock_id, stock_data.ticker_symbol, data_point.date, data_point.low, data_point.open_price, data_point.high, data_point.volume, data_point.close))
             
             # Add the rowcount of the current execute to the total rowcount
             total_rowcount += cursor.rowcount
         
         # Check if any rows were affected
         if total_rowcount > 0:
-            print(f"Total rows inserted: {total_rowcount}")
+            print(f"Total rows inserted for ticker symbol {stock_data.ticker_symbol}: {total_rowcount}")
             connection.commit()
         else:
-            print("No rows were affected. Possible duplicate or failed insert.")
+            print(f"No rows were affected or ticker symbol {stock_data.ticker_symbol}. Possible duplicate or failed insert.")
             connection.rollback()
 
         return total_rowcount  # Return the total rowcount
@@ -260,12 +234,37 @@ def filter_stock_data_by_date_range(stock_data_history, start_date, end_date):
         return None
 
 
-def check_missing_dates_of_stock_data(pool, stock_id, ticker_symbol):
+def get_stocks_ticker_id_exist(pool):
     connection = None
 
     try:
         # Acquire a connection from the pool
         connection = pool.getconn()
+
+        query = "SELECT DISTINCT stock_id, ticker_symbol FROM \"Stocks\""
+        with connection.cursor() as cursor:
+            cursor.execute(query)
+            results = cursor.fetchall()
+
+        # Fetch the results using fetchall
+        stocks_info = [
+            {'stock_id': stock_id, 'ticker_symbol': ticker_symbol}
+            for stock_id, ticker_symbol in results
+        ]
+
+        return stocks_info
+
+    except Exception as e:
+        print(f"Error getting stock ticker & its id from the database: {e}")
+
+    finally:
+        # Release the connection back to the pool
+        if connection:
+            pool.putconn(connection)
+
+def check_missing_dates_of_stock_data(connection, stock_id, ticker_symbol):
+    
+    try:
 
         # Assuming "date" is the column name and "Stocks" is the table name
         query = f'SELECT MAX("date") FROM "Stocks" WHERE stock_id = \'{stock_id}\' AND ticker_symbol = \'{ticker_symbol}\';'
@@ -285,6 +284,8 @@ def check_missing_dates_of_stock_data(pool, stock_id, ticker_symbol):
             # Calculate the difference in days
             difference_in_days = (current_date - latest_date).days
 
+            print(f"Latest date for stock {ticker_symbol}: {latest_date}, Current date: {datetime.now()}, Difference in days: {(datetime.now() - datetime.combine(latest_date, datetime.min.time())).days}") if latest_date is not None else print(f"No records found for stock {ticker_symbol}")
+
             return difference_in_days
         else:
             # Handle the case when there are no records for the given stock
@@ -295,53 +296,69 @@ def check_missing_dates_of_stock_data(pool, stock_id, ticker_symbol):
         print(f"Error getting latest date for stock {ticker_symbol}: {error}")
         return None
 
-    finally:
-        # Release the connection back to the pool
-        if connection:
-            pool.putconn(connection)
 
 
-def update_stock_data_daily(pool, stockTickerId):
+def update_missing_stock_data(db_pool, stockTickerId):
     stock_id = stockTickerId['stock_id']
     ticker_symbol = stockTickerId['ticker_symbol']
 
-    # Calculate the missing dates using the check_missing_dates_of_stock_data function
-    missing_dates = check_missing_dates_of_stock_data(pool, stock_id, ticker_symbol)
+    conn = None
 
-    if missing_dates:
-        # Create a Ticker object for the stock
-        stock = yfinance.Ticker(ticker_symbol)
+    try:
+        # get connection
+        conn = db_pool.getconn()
 
-        arr_stock_data = []
+        # Calculate the missing dates using the check_missing_dates_of_stock_data function
+        missing_dates = check_missing_dates_of_stock_data(conn, stock_id, ticker_symbol)
 
-        # Get historical data for the stock for the current day
-        hist_data = stock.history(period=f"{missing_dates}d")
+        if missing_dates:
+            # Create a Ticker object for the stock
+            stock = yfinance.Ticker(ticker_symbol)
 
-        # Check if data is available before formatting
-        if not hist_data.empty:
-            for index, row in hist_data.iterrows():
-                stock_data = {
-                    'date': pd.to_datetime(index, format='%Y-%m-%d').strftime('%Y-%m-%d'),
-                    'low': float(row['Low']),
-                    'open': float(row['Open']),
-                    'volume': int(row['Volume']),
-                    'high': float(row['High']),
-                    'close': float(row['Close']),
-                }
-                arr_stock_data.append(StockData(stock_id, ticker_symbol, None, data=[stock_data]))
+            arr_stock_data = []
 
-            # Print or return the list of StockData objects
-            for stock_data_object in arr_stock_data:
-                print(stock_data_object)
-            return arr_stock_data
+            # Get historical data for the stock for the current day
+            hist_data = stock.history(period=f"{missing_dates}d")
+
+            # Check if data is available before formatting
+            if not hist_data.empty:
+                for index, row in hist_data.iterrows():
+                    # Generate a UUID for the 'transaction_id' column
+                    transaction_id = uuid.uuid4()
+                    price_movement = PriceMovement(
+                        transaction_id=transaction_id,
+                        date=pd.to_datetime(index, format='%Y-%m-%d').strftime('%Y-%m-%d'),
+                        low=float(row['Low']),
+                        open_price=float(row['Open']),
+                        volume=int(row['Volume']),
+                        high=float(row['High']),
+                        close=float(row['Close'])
+                    )
+
+                    arr_stock_data.append(price_movement)
+
+                update_stock_info = StockData(stock_id, ticker_symbol, None, arr_stock_data)
+                insert_stock_data_into_db(conn, update_stock_info)
+
+                return update_stock_info
+            else:
+                print(f"Failed to fetch data for symbol {ticker_symbol}.")
+
+                # Return None or handle the case as needed
+                return None
         else:
-            print(f"Failed to fetch data for symbol {ticker_symbol}.")
-
-            # Return None or handle the case as needed
+            print("You are up to date!! Yayyy")
             return None
-    else:
-        print("You are up to date!! Yayyy")
+
+    except Exception as e:
+        # Handle any exceptions that might occur
+        print(f"An error occurred: {str(e)}")
+        # Optionally, you can log the exception or perform additional actions
         return None
+
+    finally:
+        # Ensure that the database connection is closed in the finally block
+        db_pool.putconn(conn)
 
 def save_stock_data_to_csv(stock_data, ticker_symbol, output_dir):
     # Convert the stock data to a Pandas DataFrame

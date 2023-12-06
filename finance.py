@@ -55,7 +55,7 @@ def fetch_stock_data_from_url(query_url):
             for i in range(len(date_list)):
                 # Generate a UUID for the 'transaction_id' column
                 transaction_id = uuid.uuid4()
-
+                
                 price_movement = PriceMovement(
                     transaction_id=transaction_id,
                     date=date_list[i],
