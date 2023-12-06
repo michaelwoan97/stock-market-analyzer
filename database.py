@@ -260,37 +260,88 @@ def filter_stock_data_by_date_range(stock_data_history, start_date, end_date):
         return None
 
 
-def update_stock_data_daily(pool, stockTickerId, periods=1):
+def check_missing_dates_of_stock_data(pool, stock_id, ticker_symbol):
+    connection = None
+
+    try:
+        # Acquire a connection from the pool
+        connection = pool.getconn()
+
+        # Assuming "date" is the column name and "Stocks" is the table name
+        query = f'SELECT MAX("date") FROM "Stocks" WHERE stock_id = \'{stock_id}\' AND ticker_symbol = \'{ticker_symbol}\';'
+
+        with connection.cursor() as cursor:
+            cursor.execute(query)
+            latest_date = cursor.fetchone()[0]
+
+        # If latest_date is None, there are no records for the given stock
+        if latest_date is not None:
+            # Convert the latest_date to a Python datetime object
+            latest_date = datetime.combine(latest_date, datetime.min.time())
+
+            # Get the current date
+            current_date = datetime.now()
+
+            # Calculate the difference in days
+            difference_in_days = (current_date - latest_date).days
+
+            return difference_in_days
+        else:
+            # Handle the case when there are no records for the given stock
+            print(f"No records found for stock {ticker_symbol}")
+            return None
+
+    except (Exception, psycopg2.DatabaseError) as error:
+        print(f"Error getting latest date for stock {ticker_symbol}: {error}")
+        return None
+
+    finally:
+        # Release the connection back to the pool
+        if connection:
+            pool.putconn(connection)
+
+
+def update_stock_data_daily(pool, stockTickerId):
     stock_id = stockTickerId['stock_id']
     ticker_symbol = stockTickerId['ticker_symbol']
 
-    # Create a Ticker object for the stock
-    stock = yfinance.Ticker(ticker_symbol)
+    # Calculate the missing dates using the check_missing_dates_of_stock_data function
+    missing_dates = check_missing_dates_of_stock_data(pool, stock_id, ticker_symbol)
 
-    arr_stock_data = []
+    if missing_dates:
+        # Create a Ticker object for the stock
+        stock = yfinance.Ticker(ticker_symbol)
 
-    # Loop through the specified number of days
-    for day in range(periods):
+        arr_stock_data = []
+
         # Get historical data for the stock for the current day
-        hist_data = stock.history(period="1d")
+        hist_data = stock.history(period=f"{missing_dates}d")
 
         # Check if data is available before formatting
         if not hist_data.empty:
-            stock_data = {
-                'date': pd.to_datetime(hist_data.index[-1]).strftime('%Y-%m-%d'),  # Get the date of the latest data point
-                'low': float(hist_data['Low'].iloc[-1]),  # Get the latest low price
-                'open': float(hist_data['Open'].iloc[-1]),  # Get the latest open price
-                'volume': int(hist_data['Volume'].iloc[-1]),  # Get the latest volume
-                'high': float(hist_data['High'].iloc[-1]),  # Get the latest high price
-                'close': float(hist_data['Close'].iloc[-1]),  # Get the latest closing price
-            }
-            arr_stock_data.append(stock_data)
-        else:
-            print(f"Failed to fetch data for symbol {stock} on {day + 1} day! No daily trading data available for today.")
+            for index, row in hist_data.iterrows():
+                stock_data = {
+                    'date': pd.to_datetime(index, format='%Y-%m-%d').strftime('%Y-%m-%d'),
+                    'low': float(row['Low']),
+                    'open': float(row['Open']),
+                    'volume': int(row['Volume']),
+                    'high': float(row['High']),
+                    'close': float(row['Close']),
+                }
+                arr_stock_data.append(StockData(stock_id, ticker_symbol, None, data=[stock_data]))
 
-    stock = StockData(stock_id, ticker_symbol, None, data=arr_stock_data)
-    print(stock)
-    return stock
+            # Print or return the list of StockData objects
+            for stock_data_object in arr_stock_data:
+                print(stock_data_object)
+            return arr_stock_data
+        else:
+            print(f"Failed to fetch data for symbol {ticker_symbol}.")
+
+            # Return None or handle the case as needed
+            return None
+    else:
+        print("You are up to date!! Yayyy")
+        return None
 
 def save_stock_data_to_csv(stock_data, ticker_symbol, output_dir):
     # Convert the stock data to a Pandas DataFrame
@@ -1588,7 +1639,7 @@ async def process_stock_data(spark, ticker_symbol, country, start_date, end_date
             if stock_ids:
                 # Use the first stock_id retrieved
                 stock_id = stock_ids[0]
-
+                
                 # Use stock_data_exists function to check if data exists in table for the given stock_id, ticker_symbol, and date range
                 data_exists = await async_stock_data_exists(connection, stock_id, ticker_symbol, start_date, end_date)
 
@@ -1596,8 +1647,7 @@ async def process_stock_data(spark, ticker_symbol, country, start_date, end_date
                     # Data exists
                     if not technical_requested:
                         # If technical_requested is False, return the stock data
-                        df = pd.DataFrame(data_exists)
-                        print(df)
+                        
                         result = {
                             "stock_id": stock_id, 
                             "ticker_symbol": ticker_symbol, 
