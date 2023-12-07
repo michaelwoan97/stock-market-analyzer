@@ -6,7 +6,7 @@ import os
 from functools import wraps
 from datetime import datetime, timedelta  # Import datetime and timedelta from the datetime module
 from flask import Flask, request, jsonify
-from database import StockData, delete_watchlist, fetch_boillinger_bands_data_from_db, fetch_moving_averages_data_from_db, fetch_relative_indexes_data_from_db, filter_stock_data_by_date_range, find_watchlist_by_id, process_stock, create_user, find_user_by_username, find_user_by_id, find_watchlist, create_watchlist, add_stock_to_watchlist, get_watchlist, update_watchlist_info, update_watchlist_stocks_info, process_stock_data
+from database import AsyncStockMarketOperator, StockData, delete_watchlist, fetch_boillinger_bands_data_from_db, fetch_moving_averages_data_from_db, fetch_relative_indexes_data_from_db, filter_stock_data_by_date_range, find_watchlist_by_id, process_stock, create_user, find_user_by_username, find_user_by_id, find_watchlist, create_watchlist, add_stock_to_watchlist, get_watchlist, update_watchlist_info, update_watchlist_stocks_info, process_stock_data
 from passlib.hash import bcrypt
 from dotenv import load_dotenv
 from pyspark.sql import SparkSession
@@ -300,6 +300,9 @@ async def get_stock_data():
         end_date = data.get("end_date")
         technical_requested = data.get("technical", False)
 
+        async_stock_operator = AsyncStockMarketOperator(spark=spark)
+        await async_stock_operator.create_connection_pool()
+
         # Handle errors for start_date and end_date extraction
         if start_date is None or end_date is None:
             raise ValueError("Both start_date and end_date are required.")
@@ -311,8 +314,11 @@ async def get_stock_data():
             country = entry.get("country")
 
             if country and ticker_symbol:
-                result = await process_stock_data(spark, ticker_symbol, country, start_date, end_date, technical_requested)
+                # result = await process_stock_data(spark, ticker_symbol, country, start_date, end_date, technical_requested)
+                result = await async_stock_operator.process_stock_data(ticker_symbol, country, start_date, end_date, technical_requested)
                 stock_data_result.append(result)
+        
+        await async_stock_operator.close_connection_pool()
 
         return jsonify({'results': stock_data_result})
 

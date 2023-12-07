@@ -37,3 +37,6 @@ tests
 todo.txt
 
 # create_schedule_tasks.sh
+
+# folder contains old funcs
+old-db-funs
