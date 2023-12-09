@@ -80,6 +80,27 @@ class StockMarketOperator:
         if self.pool and connection:
             self.pool.putconn(connection)
 
+    def execute_sql(self, sql_statements):
+        success = False
+        connection = None
+        try:
+            connection = self.get_connection_from_pool()
+            with connection.cursor() as cursor:
+                for sql_statement in sql_statements:
+                    cursor.execute(sql_statement)
+            connection.commit()
+            print("SQL statements executed successfully.")
+            success = True
+        except Exception as e:
+            if connection:
+                connection.rollback()
+            print(f"Error: Unable to execute SQL statements. {e}")
+        finally:
+            # Release the connection back to the pool
+            self.close_connection(connection)
+        
+        return success
+
     # get stocks exist in Stocks table
     def get_stocks_ticker_id_exist(self):
         connection = None
