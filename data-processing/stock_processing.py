@@ -85,48 +85,151 @@ class StockAnalyzerSQL:
             print(e)
 
     def get_stocks_exist(self, stock_data_df):
+        try:
+            # Convert the 'date' column to a date type if it's not already
+            stockData = stock_data_df.withColumn("date", F.to_date(stock_data_df["date"]))
 
-        # Convert the 'date' column to a date type if it's not already
-        stockData = stock_data_df.withColumn("date", F.to_date(stock_data_df["date"]))
+            # Create a window specification for each group, ordered by the 'date' column in descending order
+            windowSpec = Window().partitionBy("ticker_symbol").orderBy(F.desc("date"))
 
-        # Create a window specification for each group, ordered by the 'date' column in descending order
-        windowSpec = Window().partitionBy("ticker_symbol").orderBy(F.desc("date"))
+            # Add a row number to the DataFrame based on the window specification
+            rankedData = stockData.withColumn("row_number", F.row_number().over(windowSpec))
 
-        # Add a row number to the DataFrame based on the window specification
-        rankedData = stockData.withColumn("row_number", F.row_number().over(windowSpec))
+            # Filter the rows with row number equal to 1 (latest date) for each group
+            latestData = rankedData.filter("row_number = 1").drop("row_number")
 
-        # Filter the rows with row number equal to 1 (latest date) for each group
-        latestData = rankedData.filter("row_number = 1").drop("row_number")
+            # Select only the necessary columns
+            result = latestData.select("ticker_symbol", "date", "low", "open", "high", "volume", "close")
 
-        # Select only the necessary columns
-        result = latestData.select("ticker_symbol", "date", "low", "open", "high", "volume", "close")
-
-        # Show the result
-        result.show()
+            # Show the result
+            return True, result
+        except Exception as e:
+            # Handle the exception and return False
+            print(f"Error Getting Stocks Exist: {e}")
+            return False, None
 
     def clean_stock_data(self, stock_data_df):
-        # Fill missing values in the 'volume' column with 0
-        stockData = stock_data_df.na.fill(0, subset=['volume'])
+        try: 
+            # Fill missing values in the 'volume' column with 0
+            stockData = stock_data_df.na.fill(0, subset=['volume'])
 
-        # Drop duplicate rows based on 'date' and 'close' columns
-        cleanedStockData = stockData.dropDuplicates(['date', 'close'])
+            # Drop duplicate rows based on 'date' and 'close' columns
+            cleanedStockData = stockData.dropDuplicates(['date', 'close'])
 
-        # Check for duplicate values in the 'date' column again
-        duplicate_rows = cleanedStockData.groupBy('date', 'close').count().filter('count > 1')
+            # Check for duplicate values in the 'date' column again
+            duplicate_rows = cleanedStockData.groupBy('date', 'close').count().filter('count > 1')
 
-        # Show the duplicate dates and close prices, if any
-        if duplicate_rows.count() > 0:
-            print("Duplicate dates and close prices found after deduplication:")
-            duplicate_rows.show()
-        else:
-            print("No duplicate dates and close prices found.")
+            # Show the duplicate dates and close prices, if any
+            if duplicate_rows.count() > 0:
+                print("Duplicate dates and close prices found after deduplication:")
+                duplicate_rows.show()
+            else:
+                print("No duplicate dates and close prices found.")
 
-        return cleanedStockData.orderBy(func.desc("date"))
+            return True, cleanedStockData.orderBy(func.desc("date"))
+        except Exception as e:
+            # Handle the exception and return False
+            print(f"Error Cleaning Stock Data: {e}")
+            return False, None
     
     def clean_stock_technical_view(self):
-        drop_views = ['DROP MATERIALIZED VIEW IF EXISTS stock_technical_view;']
-        return self.stock_market_operator.execute_sql(drop_views)
+        try:
+            drop_views = ['DROP MATERIALIZED VIEW IF EXISTS stock_technical_view;']
+            return self.stock_market_operator.execute_sql(drop_views)
+        except Exception as e:
+            # Handle the exception and return False
+            print(f"Error Cleaning Stock Techincal View: {e}")
+            return False
+    
+    def alter_tables_to_og_structures(self):
+        alter_statements = [
+            # Altered data types for MovingAverages table
+            """
+            ALTER TABLE "MovingAverages"
+            ALTER COLUMN "cal_id" TYPE UUID USING "transaction_id"::UUID,
+            ALTER COLUMN "transaction_id" TYPE UUID USING "transaction_id"::UUID,
+            ALTER COLUMN "stock_id" TYPE UUID USING "stock_id"::UUID,
+            ALTER COLUMN "ticker_symbol" TYPE VARCHAR,
+            ALTER COLUMN "date" TYPE DATE,
+            ALTER COLUMN "5_days_sma" TYPE FLOAT,
+            ALTER COLUMN "20_days_sma" TYPE FLOAT,
+            ALTER COLUMN "50_days_sma" TYPE FLOAT,
+            ALTER COLUMN "200_days_sma" TYPE FLOAT,
+            ALTER COLUMN "5_days_ema" TYPE FLOAT,
+            ALTER COLUMN "20_days_ema" TYPE FLOAT,
+            ALTER COLUMN "50_days_ema" TYPE FLOAT,
+            ALTER COLUMN "200_days_ema" TYPE FLOAT;
+            """,
+            # Altered data types for BoillingerBands table
+            """
+            ALTER TABLE "BoillingerBands"
+            ALTER COLUMN "cal_id" TYPE UUID USING "transaction_id"::UUID,
+            ALTER COLUMN "transaction_id" TYPE UUID USING "transaction_id"::UUID,
+            ALTER COLUMN "stock_id" TYPE UUID USING "stock_id"::UUID,
+            ALTER COLUMN "ticker_symbol" TYPE VARCHAR,
+            ALTER COLUMN "date" TYPE DATE,
+            ALTER COLUMN "5_upper_band" TYPE FLOAT,
+            ALTER COLUMN "20_upper_band" TYPE FLOAT,
+            ALTER COLUMN "50_upper_band" TYPE FLOAT,
+            ALTER COLUMN "200_upper_band" TYPE FLOAT,
+            ALTER COLUMN "5_lower_band" TYPE FLOAT,
+            ALTER COLUMN "20_lower_band" TYPE FLOAT,
+            ALTER COLUMN "50_lower_band" TYPE FLOAT,
+            ALTER COLUMN "200_lower_band" TYPE FLOAT;
+            """,
 
+            # Altered data types for RelativeIndexes table
+            """
+            ALTER TABLE "RelativeIndexes"
+            ALTER COLUMN "cal_id" TYPE UUID USING "transaction_id"::UUID,
+            ALTER COLUMN "transaction_id" TYPE UUID USING "transaction_id"::UUID,
+            ALTER COLUMN "stock_id" TYPE UUID USING "stock_id"::UUID,
+            ALTER COLUMN "ticker_symbol" TYPE VARCHAR,
+            ALTER COLUMN "date" TYPE DATE,
+            ALTER COLUMN "14_days_rsi" TYPE FLOAT,
+            ALTER COLUMN "20_days_rsi" TYPE FLOAT,
+            ALTER COLUMN "50_days_rsi" TYPE FLOAT,
+            ALTER COLUMN "200_days_rsi" TYPE FLOAT;
+            """
+        ]
+
+        alter_key_constrains_statements = [
+            # MovingAverages
+            'ALTER TABLE "MovingAverages" ADD CONSTRAINT "pk_MovingAverages_cal_id" PRIMARY KEY ("cal_id");',
+            'ALTER TABLE "MovingAverages" ADD CONSTRAINT "fk_MovingAverages_transaction_id" FOREIGN KEY ("transaction_id") REFERENCES "Stocks"("transaction_id") ON DELETE CASCADE;',
+            'ALTER TABLE "MovingAverages" ADD CONSTRAINT "fk_MovingAverages_stock_id_ticker_symbol" FOREIGN KEY ("stock_id", "ticker_symbol") REFERENCES "CompanyInformation"("stock_id", "ticker_symbol");',
+
+            # BoillingerBands
+            'ALTER TABLE "BoillingerBands" ADD CONSTRAINT "pk_BoillingerBands_cal_id" PRIMARY KEY ("cal_id");',
+            'ALTER TABLE "BoillingerBands" ADD CONSTRAINT "fk_BoillingerBands_transaction_id" FOREIGN KEY ("transaction_id") REFERENCES "Stocks"("transaction_id") ON DELETE CASCADE;',
+            'ALTER TABLE "BoillingerBands" ADD CONSTRAINT "fk_BoillingerBands_stock_id_ticker_symbol" FOREIGN KEY ("stock_id", "ticker_symbol") REFERENCES "CompanyInformation"("stock_id", "ticker_symbol");',
+
+            # RelativeIndexes
+            'ALTER TABLE "RelativeIndexes" ADD CONSTRAINT "pk_RelativeIndexes_cal_id" PRIMARY KEY ("cal_id");',
+            'ALTER TABLE "RelativeIndexes" ADD CONSTRAINT "fk_RelativeIndexes_transaction_id" FOREIGN KEY ("transaction_id") REFERENCES "Stocks"("transaction_id") ON DELETE CASCADE;',
+            'ALTER TABLE "RelativeIndexes" ADD CONSTRAINT "fk_RelativeIndexes_stock_id_ticker_symbol" FOREIGN KEY ("stock_id", "ticker_symbol") REFERENCES "CompanyInformation"("stock_id", "ticker_symbol");'
+        ]
+
+        # List of SQL statements for indexes
+        index_sql_statements = [
+            'CREATE INDEX IF NOT EXISTS idx_ma_stock_id_ticker_symbol_date ON "MovingAverages"("stock_id", "ticker_symbol", "date");',
+            'CREATE INDEX IF NOT EXISTS idx_ma_date ON "MovingAverages"("date");',
+            'CREATE INDEX IF NOT EXISTS idx_bb_stock_id_ticker_symbol_date ON "BoillingerBands"("stock_id", "ticker_symbol", "date");',
+            'CREATE INDEX IF NOT EXISTS idx_bb_date ON "BoillingerBands"("date");',
+            'CREATE INDEX IF NOT EXISTS idx_ri_stock_id_ticker_symbol_date ON "RelativeIndexes"("stock_id", "ticker_symbol", "date");',
+            'CREATE INDEX IF NOT EXISTS idx_ri_date ON "RelativeIndexes"("date");',
+        ]
+
+        sql_statements = alter_statements + alter_key_constrains_statements + index_sql_statements
+        # Execute SQL statements
+        return self.stock_market_operator.execute_sql(sql_statements)
+
+    def print_statements_by_status(self, process_name, status):
+        if status:
+            print(f'>>> {process_name} process is complete.')
+        else:
+            print(f'Error: {process_name} process is not complete.')
+            
     def insert_data_to_db_table(self, data, table_name, mode):
         try:
             # Write the DataFrame to the database table
@@ -176,7 +279,7 @@ class StockAnalyzerSQL:
 
                 # Show the result
                 moving_averages_data = cleanedStockData.select(['cal_id','transaction_id',"stock_id", "ticker_symbol",'date'] + [f"{p}_days_sma" for p in periods] + [f"{p}_days_ema" for p in periods]).orderBy(F.desc("date"))
-                moving_averages_data.show()
+                # moving_averages_data.show()
 
                 # Schema and table name
                 table_name = '"MovingAverages"'
@@ -191,12 +294,19 @@ class StockAnalyzerSQL:
             return False, None
 
 
-    def calculate_boillinger_bands(self, moving_averages_data_df, bollinger_periods, update_mode=None):
+    def calculate_boillinger_bands(self, stock_data_df, bollinger_periods, update_mode=None):
         try:
             if not update_mode:
 
                 partition_cols = ["stock_id", "ticker_symbol"]
 
+                # Check if the necessary EMA columns exist
+                ema_columns_exist = all(f"{p}_days_ema" in stock_data_df.columns for p in bollinger_periods)
+
+                if not ema_columns_exist:
+                    print("Error: Exponential Moving Average columns are missing.")
+                    return False, None
+                
                 # Define the windows for Bollinger Bands
                 windows = [Window().partitionBy(partition_cols).orderBy(F.desc("date")).rowsBetween(0, p - 1) for p in bollinger_periods]
 
@@ -205,20 +315,20 @@ class StockAnalyzerSQL:
                     upper_band_col = F.col(f"{p}_days_ema") + (2 * F.stddev("close").over(windows[bollinger_periods.index(p)]))
                     lower_band_col = F.col(f"{p}_days_ema") - (2 * F.stddev("close").over(windows[bollinger_periods.index(p)]))
 
-                    moving_averages_data_df = moving_averages_data_df.withColumn(f"{p}_upper_band", F.round(upper_band_col, self.round_to_decimal))
-                    moving_averages_data_df = moving_averages_data_df.withColumn(f"{p}_lower_band", F.round(lower_band_col, self.round_to_decimal))
+                    stock_data_df = stock_data_df.withColumn(f"{p}_upper_band", F.round(upper_band_col, self.round_to_decimal))
+                    stock_data_df = stock_data_df.withColumn(f"{p}_lower_band", F.round(lower_band_col, self.round_to_decimal))
 
                 # Show the result
                 selected_columns = ['cal_id','transaction_id',"stock_id", "ticker_symbol",'date'] + [f"{p}_upper_band" for p in bollinger_periods] + [f"{p}_lower_band" for p in bollinger_periods]
-                boilling_bands_data = moving_averages_data_df.select(selected_columns).orderBy(F.desc("date"))
-                boilling_bands_data.show()
+                boilling_bands_data = stock_data_df.select(selected_columns).orderBy(F.desc("date"))
+                # boilling_bands_data.show()
 
                 # Schema and table name
                 table_name = '"BoillingerBands"'
 
                 # Write the DataFrame to the database table
                 self.insert_data_to_db_table(boilling_bands_data,table_name,"overwrite")
-                return True, moving_averages_data_df.orderBy(F.desc("date"))
+                return True, stock_data_df.orderBy(F.desc("date"))
         except Exception as e:
             # Handle the exception and return False
             print(f"Error calculating boillinger bands: {e}")
@@ -276,7 +386,7 @@ class StockAnalyzerSQL:
                 # Show the result
                 result_columns = ['cal_id','transaction_id',"stock_id", "ticker_symbol",'date'] + [f"{n}_days_rsi" for n in rsi_periods]
                 relative_indexes_data = stock_data_df.select(result_columns).orderBy(F.desc("date"))
-                relative_indexes_data.show()
+                # relative_indexes_data.show()
 
                 # Schema and table name
                 table_name = '"RelativeIndexes"'
@@ -297,33 +407,48 @@ class StockAnalyzerSQL:
             
             if stock_data_df.count():
                 print(f'Stocks with Latest Data')
+                status, stocks_exist = self.get_stocks_exist(stock_data_df)
+                if status and stocks_exist:
+                    stocks_exist.show()
                 print(f'=======================')
-                self.get_stocks_exist(stock_data_df)
+                
 
                 print(f'Handling Missing Values and Deduplication....')
+                (status, cleaned_stock_df) = self.clean_stock_data(stock_data_df)
+                self.print_statements_by_status("Cleaning process is done",status)
                 print(f'=============================================')
-
-                cleaned_stock_df = self.clean_stock_data(stock_data_df)
-                print("Cleaning process is done")
                 
                 print(f'Clean or Drop Stock Technical View to Update...')
-                print(f'=======================')
-                self.clean_stock_technical_view()
+                status = self.clean_stock_technical_view()
+                self.print_statements_by_status("Clean Stock Technical View", status)
+                print(f'===============================================')
+                
 
                 print(f'Calculating Moving Averages....')
-                print(f'=======================')
                 periods = [5, 20, 50, 200]
                 status, stock_techincal_data = self.calculate_moving_averages(cleaned_stock_df,periods)
+                self.print_statements_by_status("Calculating Moving Averages", status)
+                print(f'===============================')
+                
 
                 print(f'Calculating BoilingerBands....')
-                print(f'=======================')
                 periods = [5, 20, 50, 200]
                 (status, stock_techincal_data) = self.calculate_boillinger_bands(stock_techincal_data,periods)
+                self.print_statements_by_status("Calculating Boilinger Bands", status)
+                print(f'==============================')
+                
 
                 print(f'Calculating Relative Indexes....')
-                print(f'=======================')
                 rsi_periods = [14, 20, 50, 200]
                 (status, stock_techincal_data) = self.calculate_relative_indexes(stock_techincal_data,rsi_periods)
+                self.print_statements_by_status("Calculating Relative Indexes", status)
+                print(f'================================')
+                
+
+                print(f'Update Tables to Original Structures After Overwriten process....')
+                self.print_statements_by_status("Update Table to OG Structures", self.alter_tables_to_og_structures())
+                print(f'=================================================================')
+                
 
 
 def test_class_func():
