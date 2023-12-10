@@ -28,7 +28,7 @@ default_db_properties = {
 public_schema_name = "public"
 
 # Specify the path to the PostgreSQL JDBC driver JAR file
-default_postgres_jar_path = "./drivers/postgresql-42.6.0.jar"
+default_postgres_jar_path = "data-processing/drivers/postgresql-42.6.0.jar"
 
 
 class StockAnalyzerSQL:
@@ -456,6 +456,7 @@ def test_class_func():
     stock_market_operator.create_connection_pool()
     stock_analyzer = StockAnalyzerSQL("StockDataProcessing",stock_market_operator)
     stock_analyzer.analyze_stock_market_data()
+    stock_market_operator.create_or_refresh_materialized_view_with_partition()
     
 
 test_class_func()

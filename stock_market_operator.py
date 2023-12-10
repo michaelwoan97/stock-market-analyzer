@@ -25,6 +25,7 @@ load_dotenv()
 
 
 # ---- Non-Async Operations ----
+# Notes: with pool connection approach, close connection after database operations
 # ============================================================================
 # ============================================================================
 
@@ -40,6 +41,8 @@ class StockMarketOperator:
         self.pool = None
         self.minconn = minconn
         self.maxconn = maxconn
+        self.stock_technical_view = 'stock_technical_view'
+        self.views_date_ranges= 'views_date_ranges'
     
     # Function to create a connection pool
     def create_connection_pool(self):
@@ -204,6 +207,187 @@ class StockMarketOperator:
                 connection.rollback()
             print(f"Error inserting stock data into the database: {e}")
             return 0  # Return 0 in case of an error
+        finally:
+            self.close_connection(connection)
+
+    # view_date_range table
+    def create_view_date_range_table(self):
+        conn = self.get_connection_from_pool()
+        try:
+            with conn.cursor() as cursor:
+                # Check if the table exists
+                cursor.execute("SELECT to_regclass('public.views_date_ranges')")
+                table_exists = cursor.fetchone()[0]
+
+                if not table_exists:
+                    # If it doesn't exist, create the table
+                    create_table_sql = """
+                        CREATE TABLE public.views_date_ranges (
+                            view_name VARCHAR(255) PRIMARY KEY,
+                            start_date DATE,
+                            end_date DATE
+                        );
+                    """
+                    cursor.execute(create_table_sql)
+
+                    # Commit the changes
+                    conn.commit()
+        except Exception as e:
+            print(f"Error creating {self.views_date_ranges} table: {e}")
+        finally:
+            self.close_connection(conn)
+    
+    def update_view_date_range(self, start_date, end_date):
+        connection = self.get_connection_from_pool()
+
+        try:
+            with connection.cursor() as cursor:
+                # Update or insert the date range for the given view
+                upsert_sql = """
+                    INSERT INTO public.views_date_ranges (view_name, start_date, end_date)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (view_name) DO UPDATE
+                    SET start_date = EXCLUDED.start_date, end_date = EXCLUDED.end_date;
+                """
+                cursor.execute(upsert_sql, (self.stock_technical_view, start_date, end_date))
+
+                # Commit the changes
+                connection.commit()
+        except Exception as e:
+            print(f"Error updating views_date_ranges table: {e}")
+
+    def create_or_refresh_materialized_view_with_partition(self):
+        connection = self.get_connection_from_pool()
+        try:
+            # Calculate start and end dates dynamically (e.g., 10 years from now)
+            current_date = datetime.now()
+            start_date = current_date - timedelta(days=365 * 10)
+            end_date = current_date
+
+            with connection.cursor() as cursor:
+                self.create_view_date_range_table()
+    
+                cursor.execute(
+                    "SELECT 1 FROM pg_matviews WHERE matviewname = 'stock_technical_view'"
+                )
+                view_exists_result = cursor.fetchone()
+
+                if view_exists_result is None:
+                    print(f'{self.stock_technical_view} is not exist ......')
+                    create_view_sql = """
+                        CREATE MATERIALIZED VIEW stock_technical_view AS
+                        SELECT
+                            S.stock_id,
+                            S.ticker_symbol,
+                            S.date,
+                            S.close,
+                            MA."5_days_sma" AS ma_5_days_sma,
+                            MA."20_days_sma" AS ma_20_days_sma,
+                            MA."50_days_sma" AS ma_50_days_sma,
+                            MA."200_days_sma" AS ma_200_days_sma,
+                            MA."5_days_ema" AS ma_5_days_ema,
+                            MA."20_days_ema" AS ma_20_days_ema,
+                            MA."50_days_ema" AS ma_50_days_ema,  
+                            MA."200_days_ema" AS ma_200_days_ema,
+                            BB."5_upper_band" AS bb_5_upper_band,
+                            BB."5_lower_band" AS bb_5_lower_band,
+                            BB."20_upper_band" AS bb_20_upper_band,
+                            BB."20_lower_band" AS bb_20_lower_band,
+                            BB."50_upper_band" AS bb_50_upper_band,
+                            BB."50_lower_band" AS bb_50_lower_band,
+                            BB."200_upper_band" AS bb_200_upper_band,
+                            BB."200_lower_band" AS bb_200_lower_band,
+                            RI."14_days_rsi",
+                            RI."20_days_rsi",
+                            RI."50_days_rsi",
+                            RI."200_days_rsi"
+                        FROM
+                            "Stocks" S
+                        INNER JOIN
+                            "MovingAverages" MA ON S.stock_id = MA.stock_id::uuid AND S.date = MA.date
+                        INNER JOIN
+                            "BoillingerBands" BB ON S.stock_id = BB.stock_id::uuid AND S.date = BB.date
+                        INNER JOIN
+                            "RelativeIndexes" RI ON S.stock_id = RI.stock_id::uuid AND S.date = RI.date
+                        WHERE
+                            S.date >= %s AND S.date <= %s
+                        ORDER BY
+                            S.date DESC;
+                    """
+    
+                    cursor.execute(create_view_sql, (start_date, end_date))
+    
+                    create_indexes_sql = """
+                        CREATE INDEX idx_materialized_view_combined ON stock_technical_view(stock_id, ticker_symbol, date);
+                        CREATE INDEX idx_materialized_view_date ON stock_technical_view(date);
+                    """
+                    cursor.execute(create_indexes_sql)
+        
+                else:
+                    print(f'{self.stock_technical_view} is exist ......')
+                    refresh_view_sql = "REFRESH MATERIALIZED VIEW stock_technical_view;"
+                    cursor.execute(refresh_view_sql)
+
+                connection.commit()
+                print(f'>>> Created or Refresh the {self.stock_technical_view} if exist.')
+                self.update_view_date_range(start_date, end_date)
+                print(f'>>> Updated the date ranges of the operations in the {self.views_date_ranges} table. ')
+        except Exception as e:
+            print(f"Error: {e}")
+        finally:
+            self.close_connection(connection)
+    
+    def get_stock_technical_data_from_view(self, stock_id, start_date, end_date):
+        connection = self.get_connection_from_pool()
+        try:
+            start_date = datetime.strptime(start_date, "%Y-%m-%d").date() if start_date else None
+            end_date = datetime.strptime(end_date, "%Y-%m-%d").date() if end_date else None
+            results = None
+
+            with connection.cursor() as cursor:
+                # Select data from stock_technical_view based on the date range
+                select_data_sql = """
+                    SELECT
+                        "date",
+                        "close",
+                        "ma_5_days_sma",
+                        "ma_20_days_sma",
+                        "ma_50_days_sma",
+                        "ma_200_days_sma",
+                        "ma_5_days_ema",
+                        "ma_20_days_ema",
+                        "ma_50_days_ema",
+                        "ma_200_days_ema",
+                        "bb_5_upper_band",
+                        "bb_5_lower_band",
+                        "bb_20_upper_band",
+                        "bb_20_lower_band",
+                        "bb_50_upper_band",
+                        "bb_50_lower_band",
+                        "bb_200_upper_band",
+                        "bb_200_lower_band",
+                        "14_days_rsi",
+                        "20_days_rsi",
+                        "50_days_rsi",
+                        "200_days_rsi"
+                    FROM
+                        stock_technical_view
+                    WHERE
+                        "date" >= %s AND "date" <= %s and "stock_id" = %s
+                    ORDER BY
+                        "date" DESC;
+                """
+                cursor.execute(select_data_sql, (start_date, end_date, stock_id))
+
+                # Fetch all rows as a list of dictionaries
+                columns = [desc[0] for desc in cursor.description]
+                results = [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+            return results
+
+        except asyncpg.PostgresError as e:
+            print(f"Error getting stock data from view: {e}")
+            raise e
         finally:
             self.close_connection(connection)
 
@@ -628,7 +812,7 @@ class AsyncStockMarketOperator:
                     refresh_view_sql = "REFRESH MATERIALIZED VIEW stock_technical_view;"
                     await self.pool.execute(refresh_view_sql)
     
-                await self.update_view_date_range('stock_technical_view', start_date, end_date)
+                await self.update_view_date_range(start_date, end_date)
     
         except Exception as e:
             print(f"Error: {e}")
