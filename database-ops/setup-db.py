@@ -265,18 +265,28 @@ class SqlDatabaseOperator:
             return False
 
     def execute_sql(self, sql_statements):
-        connection = self.get_connection()
-        if connection:
+        status, connection = self.get_connection()
+        cursor = None
+        if status and connection:
             try:
+                # Set autocommit mode to True
+                connection.autocommit = True
+
                 with connection.cursor() as cursor:
                     for sql_statement in sql_statements:
                         cursor.execute(sql_statement)
-                connection.commit()
+
+                # Reset autocommit mode back to False (optional)
+                connection.autocommit = False
+
                 print("SQL statements executed successfully.")
             except Exception as e:
-                
                 connection.rollback()
                 print(f"Error: Unable to execute SQL statements. {e}")
+            finally:
+                # Close the cursor explicitly (optional)
+                if cursor:
+                    cursor.close()
 
     def create_db(self):
         status, postgres_connection = self.get_connection()
@@ -395,6 +405,10 @@ class SqlDatabaseOperator:
                     workbook.close()
             
     def create_stock_market(self):
+        print(f"Drop {self.get_db_name()} if exist to re-create.....")
+        self.execute_sql(['DROP DATABASE IF EXISTS stockmarket'])
+        print("===========================================================")
+
         self.create_db()
         
         self.create_tables_schemas(create_tables_sql)
