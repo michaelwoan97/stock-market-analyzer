@@ -10,6 +10,7 @@ from matplotlib import ticker
 import pandas as pd
 import psycopg2
 import yfinance
+from pyspark.sql import SparkSession
 
 from psycopg2 import sql, pool 
 from finance import fetch_stock_data_from_url, PriceMovement
@@ -22,15 +23,24 @@ from database import StockData
 # Load the environment variables from the .env file
 load_dotenv()
 
+app_name = "StockMarketOperator"
+# Specify the path to the PostgreSQL JDBC driver JAR file
+default_postgres_jar_path = "data_processing/drivers/postgresql-42.6.0.jar"
 
+default_spark = SparkSession.builder \
+                        .appName(app_name) \
+                        .config("spark.executor.memory", "4g") \
+                        .config("spark.jars", default_postgres_jar_path ) \
+                        .getOrCreate()
 
 # ---- Non-Async Operations ----
-# Notes: with pool connection approach, close connection after database operations
+# Notes: with pool connection approach, close each connection after each operation involved with the database
+#       only one instance of spark session is created and shared among all the operations
 # ============================================================================
 # ============================================================================
 
 class StockMarketOperator:
-    def __init__(self, minconn=5, maxconn=10):
+    def __init__(self, spark=None, minconn=5, maxconn=10):
         self.db_params = {
             'user': os.environ.get('DB_USER'),
             'password': os.environ.get('DB_PASSWORD'),
@@ -39,6 +49,7 @@ class StockMarketOperator:
             'database': os.environ.get('DB_NAME')
         }
         self.pool = None
+        self.spark = spark if spark else default_spark
         self.minconn = minconn
         self.maxconn = maxconn
         self.stock_technical_view = 'stock_technical_view'
@@ -52,7 +63,7 @@ class StockMarketOperator:
                 maxconn=self.maxconn,
                 **self.db_params
             )
-        except psycopg2.OperationalError as e:
+        except Exception as e:
             print(f"Error creating the connection pool: {e}")
             raise e
         
@@ -132,7 +143,195 @@ class StockMarketOperator:
         finally:
             # Release the connection back to the pool
             self.close_connection(connection)
+            
+    def view_exists(self, view_name):
+        """
+        Check if a view exists in the database.
 
+        Parameters:
+        - view_name: Name of the view to check
+
+        Returns:
+        - True if the view exists, False otherwise
+        """
+        conn = self.get_connection_from_pool()
+        try:
+            result = None
+            with conn.cursor() as cur:
+                # Use the async_check_view_exists function to check if the view exists
+                query = f"SELECT EXISTS (SELECT 1 FROM information_schema.views WHERE table_name = '{view_name}')"
+                cur.execute(query)  # Use execute instead of fetchone(query)
+                result = cur.fetchone()
+                        
+            return result
+            
+        except (Exception, psycopg2.DatabaseError) as error:
+            if conn:
+                conn.rollback()
+            print(f"Error checking view existence: {error}")
+            return False
+        finally:
+            self.close_connection(conn)
+        
+
+    def stock_data_exists(self, stock_id, ticker_symbol, start_date=None, end_date=None):
+
+        """
+        Check if stock data exists in the database based on stock ID, ticker symbol, and optional date range.
+        """
+        connection = self.get_connection_from_pool()
+        try:
+            result_list = None
+            with connection.cursor() as cur:
+                query = """
+                    SELECT
+                        "transaction_id",
+                        "stock_id",
+                        "ticker_symbol",
+                        "date",
+                        "close",
+                        "volume"
+                    FROM "Stocks"
+                    WHERE "stock_id" = %s AND "ticker_symbol" = %s
+                """
+
+                # Convert optional date range conditions to date objects
+                if start_date is not None:
+                    start_date = datetime.strptime(start_date, "%Y-%m-%d").date()
+                    query += ' AND "date" >= %s '
+                if end_date is not None:
+                    end_date = datetime.strptime(end_date, "%Y-%m-%d").date()
+                    query += ' AND "date" <= %s '
+
+                # Execute the query with parameters
+                if start_date is not None and end_date is not None:
+                    cur.execute(query, (stock_id, ticker_symbol, start_date, end_date))
+                else:
+                    cur.execute(query, (stock_id, ticker_symbol))
+
+                # Fetch all rows resulting from the query
+                result = cur.fetchall()
+
+                # Get the column names from result.description
+                columns = [desc[0] for desc in cur.description]
+
+                # Create a list of dictionaries using a list comprehension
+                result_list = [dict(zip(columns, row)) for row in result]
+
+            return result_list
+        except Exception as e:
+            if connection:
+                connection.rollback()
+            print(f"Error checking stock data existence: {e}")
+            # Handle the error or re-raise it
+            raise 
+        finally:
+            self.close_connection(connection)
+        
+    def check_company_exists(self, ticker_symbol, country):
+        """
+        Check if a company exists in the database based on the ticker symbol and country.
+        """
+        connection = self.get_connection_from_pool()
+        try:
+            with connection.cursor() as cur:
+                query = "SELECT \"stock_id\" FROM \"CompanyInformation\" WHERE \"ticker_symbol\" = %s AND \"country\" = %s;"
+                cur.execute(query, (ticker_symbol, country))  # Use execute to execute the query
+                result = cur.fetchone()  # Use fetchone to get the result
+
+            # Check if result is not None before accessing its fields
+            if result:
+                stock_ids = [result[0]]
+                return stock_ids
+            else:
+                # Handle the case where no result is found
+                return []
+        except Exception as e:
+            if connection:
+                connection.rollback()
+            print(f"Error checking company existence: {e}")
+            # Handle the error or re-raise it
+            raise e
+        finally:
+            self.close_connection(connection)
+    
+    # join table for technical data
+    def get_stock_technical_data_from_tables(self, stock_id, start_date=None, end_date=None):
+        conn = self.get_connection_from_pool()
+        try:
+            formatted_start_date = (
+                datetime.strptime(start_date, "%Y-%m-%d").date()
+                if start_date
+                else None
+            )
+            formatted_end_date = (
+                datetime.strptime(end_date, "%Y-%m-%d").date()
+                if end_date
+                else None
+            )
+
+            data = []
+            with conn.cursor() as cur:
+                query = """
+                    SELECT
+                        S."stock_id",
+                        S."ticker_symbol",
+                        S."date",
+                        S."close",
+                        MA."5_days_sma" AS "ma_5_days_sma",
+                        MA."20_days_sma" AS "ma_20_days_sma",
+                        MA."50_days_sma" AS "ma_50_days_sma",
+                        MA."200_days_sma" AS "ma_200_days_sma",
+                        MA."5_days_ema" AS "ma_5_days_ema",
+                        MA."20_days_ema" AS "ma_20_days_ema",
+                        MA."50_days_ema" AS "ma_50_days_ema",
+                        MA."200_days_ema" AS "ma_200_days_ema",
+                        BB."5_upper_band" AS "bb_5_upper_band",
+                        BB."5_lower_band" AS "bb_5_lower_band",
+                        BB."20_upper_band" AS "bb_20_upper_band",
+                        BB."20_lower_band" AS "bb_20_lower_band",
+                        BB."50_upper_band" AS "bb_50_upper_band",
+                        BB."50_lower_band" AS "bb_50_lower_band",
+                        BB."200_upper_band" AS "bb_200_upper_band",
+                        BB."200_lower_band" AS "bb_200_lower_band",
+                        RI."14_days_rsi",
+                        RI."20_days_rsi",
+                        RI."50_days_rsi",
+                        RI."200_days_rsi"
+                    FROM
+                        "Stocks" S
+                    INNER JOIN
+                        "MovingAverages" MA ON S."stock_id" = MA."stock_id" AND S."date" = MA."date"
+                    INNER JOIN
+                        "BoillingerBands" BB ON S."stock_id" = BB."stock_id" AND S."date" = BB."date"
+                    INNER JOIN
+                        "RelativeIndexes" RI ON S."stock_id" = RI."stock_id" AND S."date" = RI."date"
+                """
+
+                params = []
+                if start_date is not None:
+                    query += 'WHERE S."date" >= %s '
+                    params.append(formatted_start_date)
+                if end_date is not None:
+                    query += 'AND S."date" <= %s '
+                    params.append(formatted_end_date)
+
+                query += 'AND S."stock_id" = %s '
+                params.append(stock_id)
+
+                query += 'ORDER BY S."date" ASC;'
+
+                cur.execute(query, params)
+                result = cur.fetchall()
+                columns = [desc[0] for desc in cur.description]
+                data = [dict(zip(columns, row)) for row in result]
+
+            return data
+
+        except Exception as e:
+            print(f"Error fetching technical data: {e}")
+            return None
+        
     # check if stock missing data 
     def check_missing_dates_of_stock_data(self, stock_id, ticker_symbol):
         connection = None
@@ -187,7 +386,17 @@ class StockMarketOperator:
                         INSERT INTO "Stocks" ("transaction_id", "stock_id", "ticker_symbol", "date", "low", "open", "high", "volume", "close")
                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
                     """
-                    cursor.execute(query, (str(data_point.transaction_id), stock_data.stock_id, stock_data.ticker_symbol, data_point.date, data_point.low, data_point.open_price, data_point.high, data_point.volume, data_point.close))
+                    cursor.execute(query, (
+                        str(data_point.transaction_id),
+                        stock_data.stock_id,
+                        stock_data.ticker_symbol,
+                        data_point.date,
+                        data_point.low,
+                        data_point.open_price,
+                        data_point.high,
+                        data_point.volume,
+                        data_point.close
+                    ))
                     
                     # Add the rowcount of the current execute to the total rowcount
                     total_rowcount += cursor.rowcount
@@ -452,6 +661,382 @@ class StockMarketOperator:
         finally:
             # Ensure that the database connection is closed in the finally block
             self.close_connection(conn)
+    
+    # insert data to "Stocks" table
+    def insert_stock_data_table(self, stock_data):
+        conn = self.get_connection_from_pool()
+        try:
+            with conn.cursor() as cur:
+                total_rowcount = 0
+
+                for data_point in stock_data.data:
+                    data_point_date = datetime.strptime(data_point.date, '%Y-%m-%d')
+                    query = """
+                        INSERT INTO "Stocks" ("transaction_id", "stock_id", "ticker_symbol", "date", "low", "open", "high", "volume", "close")
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
+                    """
+
+                    cur.execute(
+                        query,
+                        (
+                            data_point.transaction_id,
+                            stock_data.stock_id,
+                            stock_data.ticker_symbol,
+                            data_point_date,
+                            data_point.low,
+                            data_point.open_price,
+                            data_point.high,
+                            data_point.volume,
+                            data_point.close,
+                        ),
+                    )
+                    
+                    total_rowcount += 1
+
+                if total_rowcount > 0:
+                    conn.commit()
+                    print(f"Total rows inserted into Stocks table: {total_rowcount}")
+                else:
+                    print("No rows were affected. Possible duplicate or failed insert into Stocks table.")
+        except Exception as e:
+            if conn:
+                conn.rollback()
+            print(f"Error inserting stock data into the database: {e}")
+        finally:
+            self.close_connection(conn)
+
+    # ---- Insert Operations into technical data tables ----
+    def insert_moving_averages(self, moving_averages_data):
+        conn = self.get_connection_from_pool()
+
+        try:
+            with conn.cursor() as cur:
+                total_rowcount = 0
+                for data_point in moving_averages_data:
+                    query = """
+                        INSERT INTO "MovingAverages" ("cal_id", "transaction_id", "stock_id", "ticker_symbol", "date",
+                                                    "5_days_sma", "20_days_sma", "50_days_sma", "200_days_sma",
+                                                    "5_days_ema", "20_days_ema", "50_days_ema", "200_days_ema")
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
+                    """
+
+                    cur.execute(
+                        query,
+                        (
+                            data_point['cal_id'],
+                            data_point['transaction_id'],
+                            data_point['stock_id'],
+                            data_point['ticker_symbol'],
+                            data_point['date'],
+                            data_point['ma_5_days_sma'],
+                            data_point['ma_20_days_sma'],
+                            data_point['ma_50_days_sma'],
+                            data_point['ma_200_days_sma'],
+                            data_point['ma_5_days_ema'],
+                            data_point['ma_20_days_ema'],
+                            data_point['ma_50_days_ema'],
+                            data_point['ma_200_days_ema'],
+                        ),
+                    )
+
+                    total_rowcount += 1
+
+                if total_rowcount > 0:
+                    conn.commit()
+                    print(f"Total rows inserted into MovingAverages table: {total_rowcount}")
+                else:
+                    print("No rows were affected. Possible duplicate or failed insert into MovingAverages table.")
+        except Exception as e:
+            if conn:
+                conn.rollback()
+            print(f"Error inserting moving averages data into the database: {e}")
+        finally:
+            self.close_connection(conn)
+
+    def insert_boillinger_bands(self, boillinger_bands_data):
+        conn = self.get_connection_from_pool()
+
+        try:
+            with conn.cursor() as cur:
+                total_rowcount = 0
+                for data_point in boillinger_bands_data:
+                    query = """
+                        INSERT INTO "BoillingerBands" ("cal_id", "transaction_id", "stock_id", "ticker_symbol", "date",
+                                                    "5_upper_band", "20_upper_band", "50_upper_band", "200_upper_band",
+                                                    "5_lower_band", "20_lower_band", "50_lower_band", "200_lower_band")
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
+                    """
+                    cur.execute(
+                        query,
+                        (
+                            data_point['cal_id'],
+                            data_point['transaction_id'],
+                            data_point['stock_id'],
+                            data_point['ticker_symbol'],
+                            data_point['date'],
+                            data_point['bb_5_upper_band'],
+                            data_point['bb_20_upper_band'],
+                            data_point['bb_50_upper_band'],
+                            data_point['bb_200_upper_band'],
+                            data_point['bb_5_lower_band'],
+                            data_point['bb_20_lower_band'],
+                            data_point['bb_50_lower_band'],
+                            data_point['bb_200_lower_band'],
+                        ),
+                    )
+
+                    total_rowcount += 1
+
+                if total_rowcount > 0:
+                    conn.commit()
+                    print(f"Total rows inserted into BoillingerBands table: {total_rowcount}")
+                else:
+                    print("No rows were affected. Possible duplicate or failed insert into BoillingerBands table.")
+
+        except Exception as e:
+            if conn:
+                conn.rollback()
+            print(f"Error inserting Boillinger Bands data into the database: {e}")
+        finally:
+            self.close_connection(conn)
+
+    def insert_relative_indexes(self, relative_indexes_data):
+        conn = self.get_connection_from_pool()
+        try:
+            with conn.cursor() as cur:
+                total_rowcount = 0 
+                for data_point in relative_indexes_data:
+                    query = """
+                        INSERT INTO "RelativeIndexes" ("cal_id", "transaction_id", "stock_id", "ticker_symbol", "date",
+                                                    "14_days_rsi", "20_days_rsi", "50_days_rsi", "200_days_rsi")
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
+                    """
+
+                    cur.execute(
+                        query,
+                        (
+                            data_point['cal_id'],
+                            data_point['transaction_id'],
+                            data_point['stock_id'],
+                            data_point['ticker_symbol'],
+                            data_point['date'],
+                            data_point['14_days_rsi'],
+                            data_point['20_days_rsi'],
+                            data_point['50_days_rsi'],
+                            data_point['200_days_rsi'],
+                        ),
+                    )
+                    total_rowcount += 1
+
+                if total_rowcount > 0:
+                    conn.commit()
+                    print(f"Total rows inserted into RelativeIndexes table: {total_rowcount}")
+                else:
+                    print("No rows were affected. Possible duplicate or failed insert into RelativeIndexes table.")
+
+        except Exception as e:
+            if conn:
+                conn.rollback()
+            print(f"Error inserting Relative Indexes data into the database: {e}")
+        finally:
+            self.close_connection(conn)
+
+    # ---- Async Insert Operations to Stocks and Techincal Tables (if have) ----
+    # insert new stock data with both price movements and techincal_data (optional)
+    def insert_data(self, stock_data, technical_data=None):
+        try:
+            self.insert_stock_data_table(stock_data)
+
+            # Check if technical_data is not None and insert into respective tables
+            if technical_data:
+                self.insert_technical_data(technical_data)
+        except Exception as e:
+            print(f"Error during async_insert_data_async: {e}")
+
+
+    # Extract necessary data and call the respective async insert functions
+    def insert_technical_data(self, technical_data):
+        try:
+            moving_averages_data = technical_data[['cal_id', 'transaction_id', 'stock_id', 'ticker_symbol', 'date',
+                                                'ma_5_days_sma', 'ma_20_days_sma', 'ma_50_days_sma', 'ma_200_days_sma',
+                                                'ma_5_days_ema', 'ma_20_days_ema', 'ma_50_days_ema', 'ma_200_days_ema']].toPandas().to_dict('records')
+
+            boillinger_bands_data = technical_data[['cal_id', 'transaction_id', 'stock_id', 'ticker_symbol', 'date',
+                                                    'bb_5_upper_band', 'bb_20_upper_band', 'bb_50_upper_band', 'bb_200_upper_band',
+                                                    'bb_5_lower_band', 'bb_20_lower_band', 'bb_50_lower_band', 'bb_200_lower_band']].toPandas().to_dict('records')
+
+            relative_indexes_data = technical_data[['cal_id', 'transaction_id', 'stock_id', 'ticker_symbol', 'date',
+                                                    '14_days_rsi', '20_days_rsi', '50_days_rsi', '200_days_rsi']].toPandas().to_dict('records')
+
+            self.insert_moving_averages(moving_averages_data)
+            self.insert_boillinger_bands(boillinger_bands_data)
+            self.insert_relative_indexes(relative_indexes_data)
+
+        except Exception as e:
+            print(f"Error during async_insert_technical_data: {e}")
+    
+    def process_stock_data(self, ticker_symbol, country, start_date, end_date, technical_requested):
+        spark = self.spark
+
+        try:
+            result = None
+            
+            # Check if the company exists and get the stock_ids
+            stock_ids =  self.check_company_exists(ticker_symbol, country)
+    
+            if stock_ids:
+                # Use the first stock_id retrieved
+                stock_id = stock_ids[0]
+                
+                # Use stock_data_exists function to check if data exists in table for the given stock_id, ticker_symbol, and date range
+                data_exists = self.stock_data_exists(stock_id, ticker_symbol, start_date, end_date)
+                
+                if data_exists:
+                    
+                    # Data exists
+                    if not technical_requested:
+                        # If technical_requested is False, return the stock data
+                        
+                        result = {
+                            "stock_id": stock_id, 
+                            "ticker_symbol": ticker_symbol, 
+                            "country": country, 
+                            "data": data_exists
+                        }
+                    else:
+                        # Check if the view exists before attempting to retrieve data from it
+                        view_name = f"stock_technical_view"  
+
+                        if not self.view_exists(view_name):
+                            # If data is not found in the view, try to get it from tables
+                            technical_data_from_tables = self.get_stock_technical_data_from_tables(stock_id, start_date, end_date)
+
+                            if technical_data_from_tables:
+                                print(f'{ticker_symbol} has techincal data from joining tables')
+                                
+                                # If data is found in tables, use it
+                                result = {"stock_id": stock_id, "ticker_symbol": ticker_symbol, "country": country, "technical": technical_data_from_tables}
+                            else:
+                                print(f'Techincal data is not available for {ticker_symbol} from Calcualtion tables!')
+                            
+                                result = {
+                                    "stock_id": stock_id, 
+                                    "ticker_symbol": ticker_symbol, 
+                                    "country": country, 
+                                    "data": data_exists
+                                }
+                        else:
+                            # Try to get technical data from a view
+                            technical_data_from_view = self.get_stock_technical_data_from_view(stock_id, start_date, end_date)
+
+                            if technical_data_from_view:
+                                # If data is found in the view, use it
+                                technical_data = technical_data_from_view
+
+                                # Print the DataFrame
+                                print(f'{ticker_symbol} has Technical Data from View')
+                                
+                                result = {
+                                    "stock_id": stock_id, 
+                                    "ticker_symbol": ticker_symbol, 
+                                    "country": country, 
+                                    "technical": technical_data
+                                }
+                            else:
+                                # Handle the case where the view is empty or data retrieval fails
+                                print(f"No data found in the view {view_name}.")
+
+                                # If data is not found in the view, try to get it from tables
+                                technical_data_from_tables = self.get_stock_technical_data_from_tables(stock_id, start_date, end_date)
+
+                                if technical_data_from_tables:
+                                    print(f'{ticker_symbol} has techincal data from joining tables')
+                                    
+                                    # If data is found in tables, use it
+                                    result = {"stock_id": stock_id, "ticker_symbol": ticker_symbol, "country": country, "technical": technical_data_from_tables}
+                                else:
+                                    print(f'Techincal data is not available for {ticker_symbol} from Calcualtion tables!')
+                                    result = {
+                                        "stock_id": stock_id, 
+                                        "ticker_symbol": ticker_symbol, 
+                                        "country": country, 
+                                        "data": data_exists
+                                    }     
+                else:
+                    # Stock data does not exist in the database
+                    print(f"No stock data found for {ticker_symbol} with stock_id {stock_id} in the database. Need to fetch data.")
+                    query_url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker_symbol}?symbol={ticker_symbol}&period1=0&period2=9999999999&interval=1d&includePrePost=true&events=div%2Csplit"
+
+                    # Fetch stock data using the query_url and store it in a StockData object
+                    arr_stock_data_history = fetch_stock_data_from_url(query_url)
+                    stock_data = StockData(stock_id, ticker_symbol, country, data=arr_stock_data_history)
+                    
+                    # Check if stock_data is not empty before proceeding with Spark processing
+                    if not stock_data.data:
+                        print("Error: Stock data is empty.")
+                    else:
+
+                        # to use in async task later for inserting
+                        stock_price_movements = copy.deepcopy(stock_data)
+                        technical_data = None
+                        
+                        if not technical_requested:
+                            # If technical_requested is False, return the fetched stock data
+                            filter_data = [entry for entry in stock_data.data if start_date <= entry.date <= end_date]
+                            stock_data.data = filter_data
+                            result = stock_data.to_dict()
+
+                        else:
+
+                            # Process stock data with Spark
+                            technical_data, filtered_technical_data = process_stock_data_with_spark(spark, stock_data, start_date, end_date)
+
+                            if filtered_technical_data:
+                                # Display unfiltered technical data
+                                print(">>> Filtered Technical Data is ready")
+
+                                # Extract the columns you need
+                                stock_id = filtered_technical_data.select("stock_id").first()[0]
+                                ticker_symbol = filtered_technical_data.select("ticker_symbol").first()[0]
+
+                                # List of columns to exclude from the final list of dictionaries
+                                exclude_columns = ["stock_id", "ticker_symbol"]
+
+                                # Remove the columns from the DataFrame
+                                filtered_technical_data = filtered_technical_data.drop(*exclude_columns)
+                                # filtered_technical_data.show()
+                                # Convert DataFrame to list of dictionaries
+                                technical_data_list = filtered_technical_data.toPandas().to_dict('records')
+                            
+                                # Create the final dictionary
+                                result = {"stock_id": stock_id, "ticker_symbol": ticker_symbol, "country": country, "technical": technical_data_list}
+
+                            else:
+                                print("Error: Unable to process stock data with Spark.")
+                                
+                                filter_data = [entry for entry in stock_data.data if start_date <= entry.date <= end_date]
+                                stock_data.data = filter_data
+                                result = stock_data.to_dict()   
+                            
+                        # inserting price movement async 
+                        print(f'{ticker_symbol} is being inserted to the table')
+                    
+                        if technical_data:
+                            self.insert_data(stock_price_movements, technical_data)
+                        else:
+                            self.insert_data(stock_price_movements)
+
+            else:
+                # Company does not exist, you may want to handle this case accordingly
+                print("Company does not exist. Handle this case accordingly.")
+                result = None
+            
+            return result
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            # Handle database errors
+            print(f"Database error: {error}")
+            return None
 
 # ---- Async Operations ----
 # ============================================================================
@@ -1195,7 +1780,7 @@ class AsyncStockMarketOperator:
 
                             if filtered_technical_data:
                                 # Display unfiltered technical data
-                                print("Filtered Technical Data:")
+                                print(">>> Filtered Technical Data is ready")
 
                                 # Extract the columns you need
                                 stock_id = filtered_technical_data.select("stock_id").first()[0]
@@ -1206,7 +1791,7 @@ class AsyncStockMarketOperator:
 
                                 # Remove the columns from the DataFrame
                                 filtered_technical_data = filtered_technical_data.drop(*exclude_columns)
-                                filtered_technical_data.show()
+                                # filtered_technical_data.show()
                                 # Convert DataFrame to list of dictionaries
                                 technical_data_list = filtered_technical_data.toPandas().to_dict('records')
                             

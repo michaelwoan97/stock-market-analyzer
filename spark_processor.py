@@ -1,6 +1,6 @@
 from pyspark.sql.functions import col, lit
 import uuid
-from pyspark.sql.types import StructType, StructField, StringType, DateType, FloatType, IntegerType
+from pyspark.sql.types import StructType, StructField, StringType, DateType, FloatType, IntegerType, LongType
 from pyspark.sql.window import Window
 from pyspark.sql import functions as F
 
@@ -26,13 +26,13 @@ def clean_stock_data(spark, stock_data):
             StructField("low", FloatType(), True),
             StructField("open", FloatType(), True),
             StructField("high", FloatType(), True),
-            StructField("volume", IntegerType(), True),
+            StructField("volume", LongType(), True),
             StructField("close", FloatType(), True),
         ])
 
         # Create a DataFrame from the StockData's data attribute
         stock_data_df = spark.createDataFrame(price_movement_dicts, schema=schema)
-
+       
         # Convert the 'date' column to DateType
         stock_data_df = stock_data_df.withColumn("date", F.to_date("date"))
        
