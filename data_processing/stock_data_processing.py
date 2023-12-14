@@ -3,7 +3,7 @@ sys.path.append('..')
 
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as func
-from pyspark.sql.types import StructType, StructField, StringType, IntegerType, FloatType, DateType, DoubleType, ArrayType
+from pyspark.sql.types import StructType, StructField, StringType, IntegerType, FloatType, DateType, DoubleType, ArrayType, LongType
 import matplotlib.pyplot as plt
 import seaborn as sns
 import os
@@ -60,7 +60,7 @@ class StockAnalyzerSQL:
             StructField("low", FloatType(), True),
             StructField("open", FloatType(), True),
             StructField("high", FloatType(), True),
-            StructField("volume", IntegerType(), True),
+            StructField("volume", LongType(), True),
             StructField("close", FloatType(), True)
         ])
         return custom_schema
@@ -458,12 +458,12 @@ class StockAnalyzerSQL:
                 
 
 
-# def analyze_stock_market():
-#     stock_market_operator = StockMarketOperator(default_spark)
-#     stock_market_operator.create_connection_pool()
-#     stock_analyzer = StockAnalyzerSQL(app_name,stock_market_operator)
-#     stock_analyzer.analyze_stock_market_data()
-#     stock_market_operator.create_or_refresh_materialized_view_with_partition()
+def analyze_stock_market():
+    stock_market_operator = StockMarketOperator(default_spark)
+    stock_market_operator.create_connection_pool()
+    stock_analyzer = StockAnalyzerSQL(stock_market_operator)
+    stock_analyzer.analyze_stock_market_data()
+    stock_market_operator.create_or_refresh_materialized_view_with_partition()
     
 
 # analyze_stock_market()
